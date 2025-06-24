@@ -169,7 +169,7 @@ func checkTunnelVMs() {
 	for i, tunnelVM := range tunnelVMs {
 		vm := servers.Get(context.Background(), &tunnelVM.OSCmpClient, tunnelVM.VMID)
 		if vm.Err != nil {
-			fmt.Println("Server not found, delete all ngrok tunnel")
+			log.Printf("Server not found, delete all ngrok tunnel, name=%v id=%v", tunnelVM.VMname, tunnelVM.VMID)
 			tunnelVM.DeleteAllTunnel()
 			tunnelVMs = openStack.RemoveByIndex(tunnelVMs, i)
 			continue
