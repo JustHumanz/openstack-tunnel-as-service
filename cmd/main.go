@@ -74,6 +74,7 @@ func main() {
 		),
 		gocron.NewTask(
 			func() {
+				log.Println("Searching new vms with tunnel metadata")
 				allPages, err := servers.List(computeClient, servers.ListOpts{}).AllPages(ctx)
 				if err != nil {
 					log.Fatal(err)
@@ -130,7 +131,7 @@ func main() {
 
 	_, err = s.NewJob(
 		gocron.DurationJob(
-			2*time.Minute,
+			1*time.Minute,
 		),
 		gocron.NewTask(
 			checkTunnelVMs,
@@ -164,6 +165,7 @@ func main() {
 }
 
 func checkTunnelVMs() {
+	log.Println("Check all vms with ngrok tunnel metadata")
 	for i, tunnelVM := range tunnelVMs {
 		vm := servers.Get(context.Background(), &tunnelVM.OSCmpClient, tunnelVM.VMID)
 		if vm.Err != nil {
