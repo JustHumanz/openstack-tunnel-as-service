@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -14,29 +15,59 @@ import (
 	"github.com/go-co-op/gocron/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/servers"
 	tunnelConfig "github.com/justhumanz/openstack-tunnel-as-service/internal/config"
-	openStack "github.com/justhumanz/openstack-tunnel-as-service/internal/os"
+	"github.com/justhumanz/openstack-tunnel-as-service/internal/tunnel"
 	"github.com/justhumanz/openstack-tunnel-as-service/pkg"
 )
 
-var tunnelVMs []openStack.VmTunnel
-var re *regexp.Regexp
+var (
+	tunnelVMs         []tunnel.VmTunnel
+	re                *regexp.Regexp
+	provider          pkg.Provider
+	cloudflaredBin    = flag.String("cf", "/usr/bin/cloudflared", "The binary of cloudflared")
+	cloudflaredDomain = flag.String("domain", "example.com", "The Domain of your cloudflare")
+)
 
 func init() {
-	tunnelConfig.ServiceID = map[string]int{
+	tunnelConfig.ServiceID = map[string]int{ // TODO
 		"ssh":   22,
 		"http":  80,
 		"https": 443,
 		"mysql": 3306,
 	}
-	re = regexp.MustCompile(`(?m)ngrok_endpoint_.+`)
+	re = regexp.MustCompile(`(?m)(ngrok|cf)_endpoint_.+`)
 
 	log.SetPrefix("INFO: ")
 	log.SetFlags(log.Ldate | log.Ltime)
+
+	if os.Getenv("CLOUDFLARE_API_KEY") != "" {
+		flag.Parse()
+
+		provider = pkg.Provider{
+			CF: pkg.CloudFlare{
+				CloudflaredPath: *cloudflaredBin,
+				Domain:          *cloudflaredDomain,
+				SubDomainPrefix: map[string]string{ //TODO
+					"ssh": "ssh",
+				},
+				Active: true,
+			},
+		}
+		log.Println("Check CF tunnel")
+		if !provider.CF.CheckCFTunnel() {
+			log.Println("OpenStack Tunnel not found, Create new CF tunnel")
+			provider.CF.CreateCFTunnel()
+		}
+
+		provider.CF.InitAPI()
+		provider.CF.InitTunnel()
+	} else {
+		provider.NG.Active = true
+	}
 }
 
 func main() {
 	ctx := context.Background()
-	computeClient := openStack.InitComputeClient(ctx)
+	computeClient := tunnel.InitComputeClient(ctx)
 
 	// Test struct
 	/*
@@ -100,20 +131,29 @@ func main() {
 
 					//New vm with tunnel property
 					if VMMetaData != "" && isNewVM {
-						newTunnelVM := openStack.VmTunnel{
-							VMname:      vm.Name,
-							VMID:        vm.ID,
-							OSCmpClient: *computeClient,
+						newTunnelVM := tunnel.VmTunnel{
+							VMname:         vm.Name,
+							VMID:           vm.ID,
+							OSCmpClient:    *computeClient,
+							TunnelProvider: provider,
 						}
 
 						log.Printf("Found vm with tunnel property, name=%v id=%v", vm.Name, vm.ID)
 
 						for _, vmPort := range tunnelVMSvc {
 							if tunnelConfig.ServiceID[vmPort] != 0 {
-								err := newTunnelVM.SetNgrok(vmPort, vm.Addresses)
-								if err != nil {
-									log.Fatalln(err)
+								if provider.CF.Active {
+									err := newTunnelVM.SetCloudFlare(vmPort, vm.Addresses)
+									if err != nil {
+										log.Fatalln(err)
+									}
+								} else {
+									err := newTunnelVM.SetNgrok(vmPort, vm.Addresses)
+									if err != nil {
+										log.Fatalln(err)
+									}
 								}
+
 							} else {
 								log.Printf(fmt.Sprintf("Unsupported %v endpoint", vmPort))
 							}
@@ -122,6 +162,7 @@ func main() {
 						tunnelVMs = append(tunnelVMs, newTunnelVM)
 					}
 				}
+
 			},
 		),
 	)
@@ -145,16 +186,20 @@ func main() {
 		for sig := range c {
 			// sig is a ^C, handle it
 			log.Printf("captured %v, stopping profiler and exiting..", sig)
-			for _, tunnelVM := range tunnelVMs {
-				for _, VMSvc := range tunnelVM.VMSvc {
-					v := "ngrok_endpoint_" + VMSvc.VMEndpoint["WellKnownPorts"].(string)
-					log.Printf("Stop ngrok tunnel&Remove tunnel property from vm, name=%v id=%v svc=%v", tunnelVM.VMname, tunnelVM.VMID, v)
-					tunnelVM.RemoveNgrokMetadata(v)
-					VMSvc.CtxCancel()
-					defer VMSvc.Ctx.Done()
+			if provider.NG.Active {
+				for _, tunnelVM := range tunnelVMs {
+					for _, VMSvc := range tunnelVM.VMSvc {
+						v := "ngrok_endpoint_" + VMSvc.VMEndpoint["WellKnownPorts"].(string)
+						log.Printf("Stop ngrok tunnel&Remove tunnel property from vm, name=%v id=%v svc=%v", tunnelVM.VMname, tunnelVM.VMID, v)
+						tunnelVM.RemoveTunnelMetadata(v)
+						VMSvc.CtxCancel()
+						defer VMSvc.Ctx.Done()
 
+					}
 				}
+
 			}
+
 			pprof.StopCPUProfile()
 			os.Exit(0)
 
@@ -170,8 +215,8 @@ func checkTunnelVMs() {
 		vm := servers.Get(context.Background(), &tunnelVM.OSCmpClient, tunnelVM.VMID)
 		if vm.Err != nil {
 			log.Printf("Server not found, delete all ngrok tunnel, name=%v id=%v", tunnelVM.VMname, tunnelVM.VMID)
-			tunnelVM.DeleteAllTunnel()
-			tunnelVMs = openStack.RemoveByIndex(tunnelVMs, i)
+			tunnelVM.DeleteAllNgrokTunnel()
+			tunnelVMs = tunnel.RemoveByIndex(tunnelVMs, i)
 			continue
 		}
 
@@ -205,7 +250,7 @@ func checkTunnelVMs() {
 						log.Printf("Stop ngrok tunnel, name=%v id=%v svc=%v", vmServer.Name, vmServer.ID, v)
 						tunnelVMs[i].RemoveByIndex(svcIndex)
 						log.Printf("Delete ngrok tunnel from vm property, name=%v id=%v svc=%v", vmServer.Name, vmServer.ID, v)
-						tunnelVMs[i].RemoveNgrokMetadata("ngrok_endpoint_" + v)
+						tunnelVMs[i].RemoveTunnelMetadata("ngrok_endpoint_" + v)
 					}
 				}
 			}
