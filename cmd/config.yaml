@@ -1,8 +1,0 @@
-tunnel: 4b9f2eed-8e83-4359-8382-f9e8e8238f46
-credentials-file: /home/humanz/.cloudflared/4b9f2eed-8e83-4359-8382-f9e8e8238f46.json
-originRequest:
-  connectTimeout: 30s
-ingress:
-- hostname: 33f52a13-ssh.kano2525.dev
-  service: ssh://172.16.18.177:22
-- service: http_status:404
