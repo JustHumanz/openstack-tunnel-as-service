@@ -6,44 +6,41 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/signal"
-	"regexp"
-	"runtime/pprof"
 	"strings"
 	"time"
 
 	"github.com/go-co-op/gocron/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/servers"
-	tunnelConfig "github.com/justhumanz/openstack-tunnel-as-service/internal/config"
-	"github.com/justhumanz/openstack-tunnel-as-service/internal/tunnel"
+	"github.com/justhumanz/openstack-tunnel-as-service/internal/config"
+	"github.com/justhumanz/openstack-tunnel-as-service/internal/pkg/db"
+	"github.com/justhumanz/openstack-tunnel-as-service/internal/pkg/provider"
+	"github.com/justhumanz/openstack-tunnel-as-service/internal/pkg/tunnel"
 	"github.com/justhumanz/openstack-tunnel-as-service/pkg"
 )
 
 var (
-	tunnelVMs         []tunnel.VmTunnel
-	re                *regexp.Regexp
-	provider          pkg.Provider
+	tunnelVMs         = tunnel.TunnelData{}
 	cloudflaredBin    = flag.String("cf", "/usr/bin/cloudflared", "The binary of cloudflared")
 	cloudflaredDomain = flag.String("domain", "example.com", "The Domain of your cloudflare")
 )
 
 func init() {
-	tunnelConfig.ServiceID = map[string]int{ // TODO
+	config.ServiceID = map[string]int{ // TODO
 		"ssh":   22,
 		"http":  80,
 		"https": 443,
 		"mysql": 3306,
 	}
-	re = regexp.MustCompile(`(?m)(ngrok|cf)_endpoint_.+`)
 
 	log.SetPrefix("INFO: ")
 	log.SetFlags(log.Ldate | log.Ltime)
 
+	tunnelVMs.Tunnels = db.LoadTunnels()
 	if os.Getenv("CLOUDFLARE_API_KEY") != "" {
 		flag.Parse()
 
-		provider = pkg.Provider{
-			CF: pkg.CloudFlare{
+		tunnelVMs.TunProvider = provider.Provider{
+			CF: provider.CloudFlare{
 				CloudflaredPath: *cloudflaredBin,
 				Domain:          *cloudflaredDomain,
 				SubDomainPrefix: map[string]string{ //TODO
@@ -53,171 +50,149 @@ func init() {
 			},
 		}
 		log.Println("Check CF tunnel")
-		if !provider.CF.CheckCFTunnel() {
+		if !tunnelVMs.TunProvider.CF.CheckCFTunnel() {
 			log.Println("OpenStack Tunnel not found, Create new CF tunnel")
-			provider.CF.CreateCFTunnel()
+			tunnelVMs.TunProvider.CF.CreateCFTunnel()
+
 		}
 
-		provider.CF.InitAPI()
-		provider.CF.InitTunnel()
+		tunnelVMs.InitCFAPI()
+		tunnelVMs.InitCFTunnel()
 	} else {
-		provider.NG.Active = true
+		tunnelVMs.TunProvider = provider.Provider{
+			NG: provider.Ngrok{
+				Active:     true,
+				StaticURLs: false, // https://dashboard.ngrok.com/tcp-addresses
+			},
+		}
+		log.Println("Tunnel as service has ben started, init ngrok tunnel")
+		tunnelVMs.InitNGCtx()
 	}
 }
 
 func main() {
-	ctx := context.Background()
-	computeClient := tunnel.InitComputeClient(ctx)
-
-	// Test struct
-	/*
-		ctxTest, cancelTest := context.WithCancel(context.Background())
-		tunnelVMs = append(tunnelVMs, openStack.VmTunnel{
-			VMname:      "ubuntu",
-			VMID:        "eb7964e5-b601-413a-8e53-89951ed613fc",
-			OSCmpClient: *computeClient,
-			VMSvc: []openStack.VmSvc{
-				openStack.VmSvc{
-					CtxCancel: cancelTest,
-					Ctx:       ctxTest,
-					ActiveIP:  "172.16.18.245",
-					VMEndpoint: map[string]any{
-						"address":        "172.16.18.245",
-						"port":           22,
-						"WellKnownPorts": "ssh",
-					},
-				},
-			},
-		})
-	*/
-
+	log.Println("Starting tunnel as service")
 	// create a scheduler
 	s, err := gocron.NewScheduler()
 	if err != nil {
-		log.Fatal(err)
+		// handle error
+		log.Fatalln(err)
 	}
 
-	log.Println("Add new job")
 	// add a job to the scheduler
 	_, err = s.NewJob(
 		gocron.DurationJob(
 			1*time.Minute,
 		),
 		gocron.NewTask(
-			func() {
-				log.Println("Searching new vms with tunnel metadata")
-				allPages, err := servers.List(computeClient, servers.ListOpts{}).AllPages(ctx)
-				if err != nil {
-					log.Fatal(err)
-				}
-
-				vms, err := servers.ExtractServers(allPages)
-				if err != nil {
-					log.Fatal(err)
-				}
-
-				for _, vm := range vms {
-					VMMetaData := vm.Metadata["tunnel"]
-					tunnelVMSvc := strings.Split(VMMetaData, ",")
-
-					//Check the vm with exsisting tunnel
-					isNewVM := true
-					for key := range vm.Metadata {
-						if re.MatchString(key) {
-							isNewVM = false
-							break
-						}
-					}
-
-					//New vm with tunnel property
-					if VMMetaData != "" && isNewVM {
-						newTunnelVM := tunnel.VmTunnel{
-							VMname:         vm.Name,
-							VMID:           vm.ID,
-							OSCmpClient:    *computeClient,
-							TunnelProvider: provider,
-						}
-
-						log.Printf("Found vm with tunnel property, name=%v id=%v", vm.Name, vm.ID)
-
-						for _, vmPort := range tunnelVMSvc {
-							if tunnelConfig.ServiceID[vmPort] != 0 {
-								if provider.CF.Active {
-									err := newTunnelVM.SetCloudFlare(vmPort, vm.Addresses)
-									if err != nil {
-										log.Fatalln(err)
-									}
-								} else {
-									err := newTunnelVM.SetNgrok(vmPort, vm.Addresses)
-									if err != nil {
-										log.Fatalln(err)
-									}
-								}
-
-							} else {
-								log.Printf(fmt.Sprintf("Unsupported %v endpoint", vmPort))
-							}
-						}
-
-						tunnelVMs = append(tunnelVMs, newTunnelVM)
-					}
-				}
-
-			},
+			checkNewVMs,
 		),
 	)
+	if err != nil {
+		// handle error
+		log.Fatalln(err)
+	}
+
+	// start the scheduler
+	s.Start()
+
+	//TODO: Create API
+	select {}
+}
+
+func checkNewVMs() {
+	log.Println("Start checking vms with tunnel property")
+	ctx := context.Background()
+	computeClient := pkg.InitComputeClient(ctx)
+	allPages, err := servers.List(computeClient, servers.ListOpts{}).AllPages(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	_, err = s.NewJob(
-		gocron.DurationJob(
-			1*time.Minute,
-		),
-		gocron.NewTask(
-			checkTunnelVMs,
-		),
-	)
-	s.Start()
+	vms, err := servers.ExtractServers(allPages)
+	if err != nil {
+		log.Fatal(err)
+	}
 
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt)
-	go func() {
-		for sig := range c {
-			// sig is a ^C, handle it
-			log.Printf("captured %v, stopping profiler and exiting..", sig)
-			if provider.NG.Active {
-				for _, tunnelVM := range tunnelVMs {
-					for _, VMSvc := range tunnelVM.VMSvc {
-						v := "ngrok_endpoint_" + VMSvc.VMEndpoint["WellKnownPorts"].(string)
-						log.Printf("Stop ngrok tunnel&Remove tunnel property from vm, name=%v id=%v svc=%v", tunnelVM.VMname, tunnelVM.VMID, v)
-						tunnelVM.RemoveTunnelMetadata(v)
-						VMSvc.CtxCancel()
-						defer VMSvc.Ctx.Done()
+	for _, vm := range vms {
+		metaData := vm.Metadata["tunnel"]
 
+		// If the vm already in list we should skip it
+		if !tunnelVMs.GetVMTun(vm.ID) && metaData != "" {
+			newTunnelVM := tunnel.VmTunnel{
+				VMname: vm.Name,
+				VMID:   vm.ID,
+			}
+
+			log.Printf("Found vm with tunnel property, name=%v id=%v", vm.Name, vm.ID)
+
+			listSvc := strings.Split(metaData, ",")
+			err := newTunnelVM.SetVMSvc(listSvc, vm.Addresses)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			if tunnelVMs.TunProvider.NG.Active {
+				err := newTunnelVM.SetNgrok(tunnelVMs.TunProvider.NG)
+				if err != nil {
+					log.Fatal(err)
+				}
+
+				tunEndpoint := newTunnelVM.GetTunnelEndpoints()
+				for i, val := range tunEndpoint {
+					key := fmt.Sprintf(config.NgrokTunnelMetadata, listSvc[i])
+					err := pkg.UpdateCmpProperty(computeClient, vm, key, val)
+					if err != nil {
+						log.Fatal(err)
 					}
 				}
 
+			} else if tunnelVMs.TunProvider.CF.Active {
+				err := newTunnelVM.SetCloudFlare(tunnelVMs.TunProvider.CF, true)
+				if err != nil {
+					log.Fatal(err)
+				}
+
+				tunEndpoint := newTunnelVM.GetTunnelEndpoints()
+				for i, val := range tunEndpoint {
+					key := fmt.Sprintf(config.CloudflareTunnelMetadata, listSvc[i])
+					err := pkg.UpdateCmpProperty(computeClient, vm, key, val)
+					if err != nil {
+						log.Fatal(err)
+					}
+				}
+			} else {
+				log.Fatalln("tunnel provider not found")
 			}
 
-			pprof.StopCPUProfile()
-			os.Exit(0)
-
+			tunnelVMs.AppendTunnels([]tunnel.VmTunnel{newTunnelVM})
 		}
-	}()
+	}
 
-	select {}
+	db.SaveTunnels(tunnelVMs.Tunnels)
+
 }
 
 func checkTunnelVMs() {
 	log.Println("Check all vms with ngrok tunnel metadata")
-	for i, tunnelVM := range tunnelVMs {
-		vm := servers.Get(context.Background(), &tunnelVM.OSCmpClient, tunnelVM.VMID)
+	computeClient := pkg.InitComputeClient(context.Background())
+	Prov := tunnelVMs.TunProvider
+	NG := Prov.NG
+	CF := Prov.CF
+	for index, tunnelVM := range tunnelVMs.Tunnels {
+		vm := servers.Get(context.Background(), computeClient, tunnelVM.VMID)
 		if vm.Err != nil {
-			log.Printf("Server not found, delete all ngrok tunnel, name=%v id=%v", tunnelVM.VMname, tunnelVM.VMID)
-			tunnelVM.DeleteAllNgrokTunnel()
-			tunnelVMs = tunnel.RemoveByIndex(tunnelVMs, i)
-			continue
+			if NG.Active {
+				log.Printf("Server not found, delete all ngrok tunnel, name=%v id=%v", tunnelVM.VMname, tunnelVM.VMID)
+				tunnelVM.StopNgrok(NG, "")
+				tunnelVMs.RemoveTunnelsByIndex(index)
+				continue
+			} else if CF.Active {
+				log.Printf("Server not found, delete all cloudflare tunnel, name=%v id=%v", tunnelVM.VMname, tunnelVM.VMID)
+				tunnelVM.StopCloudFlare(CF, "")
+				tunnelVMs.RemoveTunnelsByIndex(index)
+				continue
+			}
 		}
 
 		vmServer, err := vm.Extract()
@@ -225,47 +200,18 @@ func checkTunnelVMs() {
 			log.Fatal(err)
 		}
 
-		VMMetaData := vmServer.Metadata["tunnel"]
-		tunnelVMSvc := strings.Split(VMMetaData, ",")
-
-		var ngrokSvc []string
+		var tunnelSvc []string
 		for key := range vmServer.Metadata {
-			if re.MatchString(key) && VMMetaData != "" {
-				endpoint := strings.Split(key, "_")
-				ngrokSvc = append(ngrokSvc, endpoint[len(endpoint)-1])
+			if strings.HasPrefix("cloudflare", key) || strings.HasPrefix("ngrok", key) {
+				tunnelProperty := strings.Split(key, "_")
+				tunnelSvc = append(tunnelSvc, tunnelProperty[len(tunnelProperty)-1])
 			}
 		}
 
-		if ngrokSvc == nil {
-			continue
-		}
-
-		log.Printf("Check VM with ngrok tunnel, name=%v id=%v", vmServer.Name, vmServer.ID)
-		diff := pkg.Difference(ngrokSvc, tunnelVMSvc)
-		if diff != nil {
-			log.Printf("Existing VM remove some endpoint, name=%v id=%v removed svc=%v", vmServer.Name, vmServer.ID, diff)
-			for _, v := range diff {
-				for svcIndex, vmSvc := range tunnelVMs[i].VMSvc {
-					if vmSvc.VMEndpoint["port"] == tunnelConfig.ServiceID[v] {
-						log.Printf("Stop ngrok tunnel, name=%v id=%v svc=%v", vmServer.Name, vmServer.ID, v)
-						tunnelVMs[i].RemoveByIndex(svcIndex)
-						log.Printf("Delete ngrok tunnel from vm property, name=%v id=%v svc=%v", vmServer.Name, vmServer.ID, v)
-						tunnelVMs[i].RemoveTunnelMetadata("ngrok_endpoint_" + v)
-					}
-				}
-			}
-		}
-
-		RevDiff := pkg.Difference(tunnelVMSvc, ngrokSvc)
-		if RevDiff != nil {
-			log.Printf("Existing VM update some endpoint, name=%v id=%v new svc=%v", vmServer.Name, vmServer.ID, RevDiff)
-			for _, v := range RevDiff {
-				//Starting new ngrok tunnel
-				err := tunnelVMs[i].SetNgrok(v, vmServer.Addresses)
-				if err != nil {
-					log.Fatalln(err)
-				}
-			}
-		}
+		log.Printf("Check VM with tunnel property, name=%v id=%v", vmServer.Name, vmServer.ID)
+		tunnelVM.CheckRemovedSvc(tunnelSvc, Prov, computeClient, vmServer)
+		tunnelVM.CheckUpdatedSvc(tunnelSvc, Prov, computeClient, vmServer)
 	}
+
+	db.SaveTunnels(tunnelVMs.Tunnels)
 }

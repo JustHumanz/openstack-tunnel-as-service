@@ -1,6 +1,7 @@
-package pkg
+package provider
 
 import (
+	"context"
 	"os/exec"
 
 	"github.com/cloudflare/cloudflare-go/v4"
@@ -12,7 +13,15 @@ type Provider struct {
 }
 
 type Ngrok struct {
-	Active bool
+	Active     bool
+	StaticURLs bool
+	NgrokCtx   []NgCtx
+}
+
+type NgCtx struct {
+	VMendpoint string
+	CtxCancel  context.CancelFunc
+	Ctx        context.Context
 }
 
 type CloudFlare struct {

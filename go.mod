@@ -3,7 +3,7 @@ module github.com/justhumanz/openstack-tunnel-as-service
 go 1.24.4
 
 require (
-	github.com/cloudflare/cloudflare-go/v3 v3.1.0
+	github.com/cloudflare/cloudflare-go/v4 v4.5.1
 	github.com/go-co-op/gocron/v2 v2.16.2
 	github.com/gophercloud/gophercloud/v2 v2.7.0
 	golang.ngrok.com/ngrok/v2 v2.0.0
@@ -11,8 +11,6 @@ require (
 )
 
 require (
-	github.com/cloudflare/cloudflare-go/v2 v2.4.0 // indirect
-	github.com/cloudflare/cloudflare-go/v4 v4.5.1 // indirect
 	github.com/go-stack/stack v1.8.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/inconshreveable/log15 v3.0.0-testing.5+incompatible // indirect

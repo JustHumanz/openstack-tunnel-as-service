@@ -1,4 +1,4 @@
-package pkg
+package provider
 
 import (
 	"encoding/json"
@@ -8,11 +8,8 @@ import (
 	"os/exec"
 	"time"
 
-	"gopkg.in/yaml.v2"
+	"github.com/justhumanz/openstack-tunnel-as-service/internal/config"
 )
-
-const config = "config.yaml"
-const tunnelName = "openstack"
 
 // Check if the tunnel openstack already created
 func (i *CloudFlare) CheckCFTunnel() bool {
@@ -29,15 +26,15 @@ func (i *CloudFlare) CheckCFTunnel() bool {
 	}
 
 	for _, tunnel := range tunnelList {
-		if tunnel["name"].(string) == tunnelName {
+		if tunnel["name"].(string) == config.TunnelName {
 			i.TunnelID = tunnel["id"].(string)
 			i.TunnelName = tunnel["name"].(string)
 			CerdPath := i.CFTunnelCerd()
 			if _, err := os.Stat(CerdPath); err != nil {
 				log.Println("Tunnel credential not found, creating tunnel credential", CerdPath)
-				cmd := exec.Command(i.CloudflaredPath, "tunnel", "token", "--cred-file", CerdPath, tunnelName)
+				cmd := exec.Command(i.CloudflaredPath, "tunnel", "token", "--cred-file", CerdPath, config.TunnelName)
 				cmd.Stderr = os.Stderr
-				output, err = cmd.Output()
+				_, err = cmd.Output()
 				if err != nil {
 					log.Fatalln(err)
 				}
@@ -52,7 +49,7 @@ func (i *CloudFlare) CheckCFTunnel() bool {
 
 // If the tunnel not yet created need to create it first
 func (i *CloudFlare) CreateCFTunnel() {
-	cmd := exec.Command(i.CloudflaredPath, "tunnel", "create", "--output", "json", tunnelName)
+	cmd := exec.Command(i.CloudflaredPath, "tunnel", "create", "--output", "json", config.TunnelName)
 	output, err := cmd.Output()
 	if err != nil {
 		log.Fatalln(err)
@@ -75,47 +72,46 @@ func (i *CloudFlare) CFTunnelCerd() string {
 	return fmt.Sprintf("%v/.cloudflared/%v.json", home, i.TunnelID)
 }
 
-func (i *CloudFlare) InitTunnel() {
-	tunnelCfg := TunnelConfig{
-		Tunnel:          i.TunnelID,
-		CredentialsFile: i.CFTunnelCerd(),
-		OriginRequest: struct {
-			ConnectTimeout string "yaml:\"connectTimeout\""
-		}{
-			ConnectTimeout: "30s",
-		},
-		Ingress: []Ingress{
-			Ingress{
-				Service: "http_status:404",
+func (i *CloudFlare) InitTunnel() error {
+	tunnelCfg, err := ReadCloudFlareConfig()
+	if err != nil && tunnelCfg.Tunnel == "" {
+		log.Println(err)
+
+		tunnelCfg = TunnelConfig{
+			Tunnel:          i.TunnelID,
+			CredentialsFile: i.CFTunnelCerd(),
+			OriginRequest: struct {
+				ConnectTimeout string "yaml:\"connectTimeout\""
+			}{
+				ConnectTimeout: "30s",
 			},
-		},
-	}
-	data, err := yaml.Marshal(&tunnelCfg)
-	if err != nil {
-		log.Fatalln(err)
+			Ingress: []Ingress{
+				{
+					Service: "http_status:404",
+				},
+			},
+		}
 	}
 
-	log.Println("Write config to config.yaml")
-	err = os.WriteFile(config, data, 0644)
-	if err != nil {
-		log.Fatalln(err)
-	}
+	WriteCloudFlareConfig(tunnelCfg)
 
 	log.Println("Validate config")
 	err = i.ValidateCFcfg()
 	if err != nil {
-		log.Fatalln(err)
+		return err
 	}
 
 	log.Printf("Starting %v", i.CloudflaredPath)
 	err = i.StartCF()
 	if err != nil {
-		log.Fatalln(err)
+		return err
 	}
+
+	return nil
 }
 
 func (i *CloudFlare) ValidateCFcfg() error {
-	cmd := exec.Command(i.CloudflaredPath, "tunnel", "--config", config, "ingress", "validate")
+	cmd := exec.Command(i.CloudflaredPath, "tunnel", "--config", config.CFconfig, "ingress", "validate")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	err := cmd.Run()
@@ -128,10 +124,8 @@ func (i *CloudFlare) ValidateCFcfg() error {
 // Start new cloudflared
 func (i *CloudFlare) StartCF() error {
 
-	cmd := exec.Command(i.CloudflaredPath, "tunnel", "--config", config, "run", tunnelName)
+	cmd := exec.Command(i.CloudflaredPath, "tunnel", "--config", config.CFconfig, "run", config.TunnelName)
 	err := cmd.Start()
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
 	if err != nil {
 		return err
 	}
@@ -154,20 +148,12 @@ func (i *CloudFlare) ReloadCF() error {
 
 // Add the new ingress
 func (i *CloudFlare) AddCFIngress(VMHostname, VMService string) error {
-	log.Printf("Read %v file", config)
-	data, err := os.ReadFile(config)
+	tunconf, err := ReadCloudFlareConfig()
 	if err != nil {
 		return err
 	}
-
-	var tunconf TunnelConfig
-	err = yaml.Unmarshal(data, &tunconf)
-	if err != nil {
-		return err
-	}
-
 	newIngress := []Ingress{
-		Ingress{
+		{
 			Hostname: VMHostname,
 			Service:  VMService,
 		},
@@ -175,22 +161,40 @@ func (i *CloudFlare) AddCFIngress(VMHostname, VMService string) error {
 
 	tunconf.Ingress = append(newIngress, tunconf.Ingress...)
 
-	newData, err := yaml.Marshal(&tunconf)
-	if err != nil {
-		return err
-	}
+	WriteCloudFlareConfig(tunconf)
 
-	log.Printf("Update %v file", config)
-	if err := os.WriteFile(config, newData, 0644); err != nil {
-		return err
-	}
-
-	err = i.ReloadCF()
+	err = i.ValidateCFcfg()
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	return i.ValidateCFcfg()
+	return i.ReloadCF()
+}
+
+// Stop/Delete cf ingress
+func (i *CloudFlare) StopCFIngress(VMService string) error {
+	tunconf, err := ReadCloudFlareConfig()
+	if err != nil {
+		return err
+	}
+	for index, ingress := range tunconf.Ingress {
+		if ingress.Service == VMService {
+			tunconf.RemoveIngress(index)
+		}
+	}
+
+	WriteCloudFlareConfig(tunconf)
+
+	err = i.ValidateCFcfg()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return i.ReloadCF()
+}
+
+func (i *TunnelConfig) RemoveIngress(index int) {
+	i.Ingress = append(i.Ingress[:index], i.Ingress[index+1:]...)
 }
 
 type TunnelCreate struct {
