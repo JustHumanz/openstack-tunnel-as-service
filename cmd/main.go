@@ -216,7 +216,7 @@ func checkTunnelVMs() {
 
 		var tunnelSvc []string
 		for key := range vmServer.Metadata {
-			if strings.HasPrefix("cloudflare", key) || strings.HasPrefix("ngrok", key) {
+			if strings.HasPrefix(key, "cloudflare") || strings.HasPrefix(key, "ngrok") {
 				tunnelProperty := strings.Split(key, "_")
 				tunnelSvc = append(tunnelSvc, tunnelProperty[len(tunnelProperty)-1])
 			}
