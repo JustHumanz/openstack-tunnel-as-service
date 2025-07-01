@@ -93,6 +93,20 @@ func main() {
 		log.Fatalln(err)
 	}
 
+	// add a job to the scheduler
+	_, err = s.NewJob(
+		gocron.DurationJob(
+			5*time.Minute,
+		),
+		gocron.NewTask(
+			checkTunnelVMs,
+		),
+	)
+	if err != nil {
+		// handle error
+		log.Fatalln(err)
+	}
+
 	// start the scheduler
 	s.Start()
 
