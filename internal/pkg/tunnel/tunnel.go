@@ -102,6 +102,8 @@ func (i *VmTunnel) CheckUpdatedSvc(newVMSvc []string, v provider.Provider, compu
 
 		if v.NG.Active {
 			i.SetNgrok(v.NG)
+		} else if v.CF.Active {
+			i.SetCloudFlare(v.CF, true)
 		}
 	}
 }
