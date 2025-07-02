@@ -193,6 +193,7 @@ func checkTunnelVMs() {
 	Prov := tunnelVMs.TunProvider
 	NG := Prov.NG
 	CF := Prov.CF
+
 	for index, tunnelVM := range tunnelVMs.Tunnels {
 		vm := servers.Get(context.Background(), computeClient, tunnelVM.VMID)
 		if vm.Err != nil {
@@ -203,7 +204,10 @@ func checkTunnelVMs() {
 				continue
 			} else if CF.Active {
 				log.Printf("Server not found, delete all cloudflare tunnel, name=%v id=%v", tunnelVM.VMname, tunnelVM.VMID)
-				tunnelVM.StopCloudFlare(CF, "")
+				err := tunnelVM.StopCloudFlare(CF, "")
+				if err != nil {
+					log.Fatal(err)
+				}
 				tunnelVMs.RemoveTunnelsByIndex(index)
 				continue
 			}
@@ -223,8 +227,15 @@ func checkTunnelVMs() {
 		}
 
 		log.Printf("Check VM with tunnel property, name=%v id=%v", vmServer.Name, vmServer.ID)
-		tunnelVM.CheckRemovedSvc(tunnelSvc, Prov, computeClient, vmServer)
-		tunnelVM.CheckUpdatedSvc(tunnelSvc, Prov, computeClient, vmServer)
+		err = tunnelVM.CheckRemovedSvc(tunnelSvc, Prov, computeClient, vmServer)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		err = tunnelVM.CheckUpdatedSvc(tunnelSvc, Prov, computeClient, vmServer)
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	db.SaveTunnels(tunnelVMs.Tunnels)

@@ -45,14 +45,16 @@ func (i *VmTunnel) SetCloudFlare(v provider.CloudFlare, dns bool) error {
 }
 
 // Stop the ngrok tunneling by Target vm endpoint or all tunneling if target vm endpoint is empty
-func (i *VmTunnel) StopCloudFlare(v provider.CloudFlare, TvmEndpoint string) {
+func (i *VmTunnel) StopCloudFlare(v provider.CloudFlare, TvmEndpoint string) error {
 	for _, svc := range i.VMSvc {
 		vmEndpoint := svc.GetVMEndpoint()
 		if vmEndpoint == TvmEndpoint || TvmEndpoint == "" {
-			v.StopCFIngress(vmEndpoint)
+			return v.StopCFIngress(vmEndpoint)
 			// TODO: Add func to delete the dns record
 		}
 	}
+
+	return nil
 }
 
 func (i *TunnelData) InitCFAPI() error {
