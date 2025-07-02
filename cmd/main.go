@@ -194,6 +194,7 @@ func checkTunnelVMs() {
 	NG := Prov.NG
 	CF := Prov.CF
 
+	updateDB := false
 	for index, tunnelVM := range tunnelVMs.Tunnels {
 		vm := servers.Get(context.Background(), computeClient, tunnelVM.VMID)
 		if vm.Err != nil {
@@ -227,16 +228,23 @@ func checkTunnelVMs() {
 		}
 
 		log.Printf("Check VM with tunnel property, name=%v id=%v", vmServer.Name, vmServer.ID)
-		err = tunnelVM.CheckRemovedSvc(tunnelSvc, Prov, computeClient, vmServer)
+		removedSvc, err := tunnelVM.CheckRemovedSvc(tunnelSvc, Prov, computeClient, vmServer)
 		if err != nil {
 			log.Fatal(err)
 		}
 
-		err = tunnelVM.CheckUpdatedSvc(tunnelSvc, Prov, computeClient, vmServer)
+		updatedSvc, err := tunnelVM.CheckUpdatedSvc(tunnelSvc, Prov, computeClient, vmServer)
 		if err != nil {
 			log.Fatal(err)
+		}
+
+		if removedSvc != nil || updatedSvc != nil {
+			updateDB = true
 		}
 	}
 
-	db.SaveTunnels(tunnelVMs.Tunnels)
+	if updateDB {
+		db.SaveTunnels(tunnelVMs.Tunnels)
+	}
+
 }

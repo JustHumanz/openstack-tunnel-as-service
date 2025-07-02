@@ -56,7 +56,7 @@ func (i *VmTunnel) GetVMSvc() []string {
 	return vmSvcList
 }
 
-func (i *VmTunnel) CheckRemovedSvc(newVMSvc []string, v provider.Provider, computeClient *gophercloud.ServiceClient, vm *servers.Server) error {
+func (i *VmTunnel) CheckRemovedSvc(newVMSvc []string, v provider.Provider, computeClient *gophercloud.ServiceClient, vm *servers.Server) ([]string, error) {
 	currentVMSvc := i.GetVMSvc()
 	diff := pkg.Difference(newVMSvc, currentVMSvc)
 	if diff != nil {
@@ -77,7 +77,7 @@ func (i *VmTunnel) CheckRemovedSvc(newVMSvc []string, v provider.Provider, compu
 						log.Printf("Stop cloduflare tunnel, name=%v id=%v svc=%v", vm.Name, vm.ID, svcEndpoint)
 						err := v.CF.StopCFIngress(svcEndpoint)
 						if err != nil {
-							return nil
+							return nil, nil
 						}
 
 						key := fmt.Sprintf(config.CloudflareTunnelMetadata, removedSvc)
@@ -89,27 +89,27 @@ func (i *VmTunnel) CheckRemovedSvc(newVMSvc []string, v provider.Provider, compu
 		}
 	}
 
-	return nil
+	return diff, nil
 }
 
-func (i *VmTunnel) CheckUpdatedSvc(newVMSvc []string, v provider.Provider, computeClient *gophercloud.ServiceClient, vm *servers.Server) error {
+func (i *VmTunnel) CheckUpdatedSvc(newVMSvc []string, v provider.Provider, computeClient *gophercloud.ServiceClient, vm *servers.Server) ([]string, error) {
 	currentVMSvc := i.GetVMSvc()
 	diff := pkg.Difference(currentVMSvc, newVMSvc)
 	if diff != nil {
 		log.Printf("Existing VM update some tunnel property, name=%v id=%v updated svc=%v", i.VMname, i.VMID, diff)
 		err := i.SetVMSvc(diff, vm.Addresses)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		if v.NG.Active {
-			return i.SetNgrok(v.NG)
+			return diff, i.SetNgrok(v.NG)
 		} else if v.CF.Active {
-			return i.SetCloudFlare(v.CF, true)
+			return diff, i.SetCloudFlare(v.CF, true)
 		}
 	}
 
-	return nil
+	return diff, nil
 }
 
 func (i *VmTunnel) SetVMSvc(listSvc []string, ips map[string]any) error {
