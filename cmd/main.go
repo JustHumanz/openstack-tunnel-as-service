@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"time"
@@ -145,7 +144,7 @@ func checkNewVMs() {
 				VMID:   vm.ID,
 			}
 
-			log.Printf("Found vm with tunnel property, name=%v id=%v", vm.Name, vm.ID)
+			Log.Infof("Found vm with tunnel property, name=%v id=%v", vm.Name, vm.ID)
 
 			listSvc := strings.Split(metaData, ",")
 			err := newTunnelVM.SetVMSvc(listSvc, vm.Addresses)
@@ -211,15 +210,16 @@ func checkTunnelVMs() {
 		vm := servers.Get(context.Background(), computeClient, tunnelVM.VMID)
 		if vm.Err != nil {
 			if NG.Active {
-				Log.Printf("Server not found, delete all ngrok tunnel, name=%v id=%v", tunnelVM.VMname, tunnelVM.VMID)
+				Log.Infof("Server not found, delete all ngrok tunnel, name=%v id=%v", tunnelVM.VMname, tunnelVM.VMID)
 				tunnelVM.StopNgrok(NG, "")
 				tunnelVMs.RemoveTunnelsByIndex(index)
 				continue
 			} else if CF.Active {
-				Log.Printf("Server not found, delete all cloudflare tunnel, name=%v id=%v", tunnelVM.VMname, tunnelVM.VMID)
+				Log.Infof("Server not found, delete all cloudflare tunnel, name=%v id=%v", tunnelVM.VMname, tunnelVM.VMID)
 				err := tunnelVM.StopCloudFlare(CF, "")
 				if err != nil {
-					log.Fatal(err)
+					Log.Error(err)
+					continue
 				}
 				tunnelVMs.RemoveTunnelsByIndex(index)
 				continue
@@ -228,7 +228,8 @@ func checkTunnelVMs() {
 
 		vmServer, err := vm.Extract()
 		if err != nil {
-			log.Fatal(err)
+			Log.Error(err)
+			continue
 		}
 
 		var tunnelSvc []string
@@ -239,15 +240,17 @@ func checkTunnelVMs() {
 			}
 		}
 
-		Log.Printf("Check VM with tunnel property, name=%v id=%v", vmServer.Name, vmServer.ID)
+		Log.Infof("Check VM with tunnel property, name=%v id=%v", vmServer.Name, vmServer.ID)
 		removedSvc, err := tunnelVM.CheckRemovedSvc(tunnelSvc, Prov, computeClient, vmServer)
 		if err != nil {
-			log.Fatal(err)
+			Log.Error(err)
+			continue
 		}
 
 		updatedSvc, err := tunnelVM.CheckUpdatedSvc(tunnelSvc, Prov, computeClient, vmServer)
 		if err != nil {
-			log.Fatal(err)
+			Log.Error(err)
+			continue
 		}
 
 		if removedSvc != nil || updatedSvc != nil {
