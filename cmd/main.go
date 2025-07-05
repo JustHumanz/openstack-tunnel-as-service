@@ -62,7 +62,7 @@ func init() {
 
 		tunnelVMs.InitCFAPI()
 		tunnelVMs.InitCFTunnel()
-	} else {
+	} else if os.Getenv("NGROK_AUTHTOKEN") != "" {
 		tunnelVMs.TunProvider = provider.Provider{
 			NG: provider.Ngrok{
 				Active:     true,
@@ -71,6 +71,8 @@ func init() {
 		}
 		Log.Info("Tunnel as service has ben started, init ngrok tunnel")
 		tunnelVMs.InitNGCtx()
+	} else {
+		Log.Fatal("Provider not found")
 	}
 }
 
@@ -134,6 +136,8 @@ func checkNewVMs() {
 		return
 	}
 
+	lenTunTmp := len(tunnelVMs.Tunnels)
+
 	for _, vm := range vms {
 		metaData := vm.Metadata["tunnel"]
 
@@ -194,7 +198,9 @@ func checkNewVMs() {
 		}
 	}
 
-	db.SaveTunnels(tunnelVMs.Tunnels)
+	if lenTunTmp != len(tunnelVMs.Tunnels) {
+		db.SaveTunnels(tunnelVMs.Tunnels)
+	}
 
 }
 
