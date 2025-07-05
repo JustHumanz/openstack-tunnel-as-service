@@ -16,12 +16,14 @@ import (
 	"github.com/justhumanz/openstack-tunnel-as-service/internal/pkg/provider"
 	"github.com/justhumanz/openstack-tunnel-as-service/internal/pkg/tunnel"
 	"github.com/justhumanz/openstack-tunnel-as-service/pkg"
+	"github.com/sirupsen/logrus"
 )
 
 var (
 	tunnelVMs         = tunnel.TunnelData{}
 	cloudflaredBin    = flag.String("cf", "/usr/bin/cloudflared", "The binary of cloudflared")
 	cloudflaredDomain = flag.String("domain", "example.com", "The Domain of your cloudflare")
+	Log               = logrus.New()
 )
 
 func init() {
@@ -32,8 +34,11 @@ func init() {
 		"mysql": 3306,
 	}
 
-	log.SetPrefix("INFO: ")
-	log.SetFlags(log.Ldate | log.Ltime)
+	Log.SetFormatter(&logrus.TextFormatter{
+		FullTimestamp: true,
+	})
+	Log.SetOutput(os.Stdout)
+	Log.SetLevel(logrus.InfoLevel)
 
 	tunnelVMs.Tunnels = db.LoadTunnels()
 	if os.Getenv("CLOUDFLARE_API_KEY") != "" {
@@ -49,9 +54,9 @@ func init() {
 				Active: true,
 			},
 		}
-		log.Println("Check CF tunnel")
+		Log.Info("Check CF tunnel")
 		if !tunnelVMs.TunProvider.CF.CheckCFTunnel() {
-			log.Println("OpenStack Tunnel not found, Create new CF tunnel")
+			Log.Info("OpenStack Tunnel not found, Create new CF tunnel")
 			tunnelVMs.TunProvider.CF.CreateCFTunnel()
 
 		}
@@ -65,18 +70,18 @@ func init() {
 				StaticURLs: false, // https://dashboard.ngrok.com/tcp-addresses
 			},
 		}
-		log.Println("Tunnel as service has ben started, init ngrok tunnel")
+		Log.Info("Tunnel as service has ben started, init ngrok tunnel")
 		tunnelVMs.InitNGCtx()
 	}
 }
 
 func main() {
-	log.Println("Starting tunnel as service")
+	Log.Info("Starting tunnel as service")
 	// create a scheduler
 	s, err := gocron.NewScheduler()
 	if err != nil {
 		// handle error
-		log.Fatalln(err)
+		Log.Fatal(err)
 	}
 
 	// add a job to the scheduler
@@ -90,7 +95,7 @@ func main() {
 	)
 	if err != nil {
 		// handle error
-		log.Fatalln(err)
+		Log.Fatal(err)
 	}
 
 	// add a job to the scheduler
@@ -104,7 +109,7 @@ func main() {
 	)
 	if err != nil {
 		// handle error
-		log.Fatalln(err)
+		Log.Fatal(err)
 	}
 
 	// start the scheduler
@@ -115,17 +120,19 @@ func main() {
 }
 
 func checkNewVMs() {
-	log.Println("Start checking vms with tunnel property")
+	Log.Info("Start checking vms with tunnel property")
 	ctx := context.Background()
 	computeClient := pkg.InitComputeClient(ctx)
 	allPages, err := servers.List(computeClient, servers.ListOpts{}).AllPages(ctx)
 	if err != nil {
-		log.Fatal(err)
+		Log.Error(err)
+		return
 	}
 
 	vms, err := servers.ExtractServers(allPages)
 	if err != nil {
-		log.Fatal(err)
+		Log.Error(err)
+		return
 	}
 
 	for _, vm := range vms {
@@ -143,13 +150,15 @@ func checkNewVMs() {
 			listSvc := strings.Split(metaData, ",")
 			err := newTunnelVM.SetVMSvc(listSvc, vm.Addresses)
 			if err != nil {
-				log.Fatal(err)
+				Log.Error(err)
+				continue
 			}
 
 			if tunnelVMs.TunProvider.NG.Active {
 				err := newTunnelVM.SetNgrok(tunnelVMs.TunProvider.NG)
 				if err != nil {
-					log.Fatal(err)
+					Log.Error(err)
+					continue
 				}
 
 				tunEndpoint := newTunnelVM.GetTunnelEndpoints()
@@ -157,14 +166,16 @@ func checkNewVMs() {
 					key := fmt.Sprintf(config.NgrokTunnelMetadata, listSvc[i])
 					err := pkg.UpdateCmpProperty(computeClient, vm, key, val)
 					if err != nil {
-						log.Fatal(err)
+						Log.Error(err)
+						continue
 					}
 				}
 
 			} else if tunnelVMs.TunProvider.CF.Active {
 				err := newTunnelVM.SetCloudFlare(tunnelVMs.TunProvider.CF, true)
 				if err != nil {
-					log.Fatal(err)
+					Log.Error(err)
+					continue
 				}
 
 				tunEndpoint := newTunnelVM.GetTunnelEndpoints()
@@ -172,11 +183,12 @@ func checkNewVMs() {
 					key := fmt.Sprintf(config.CloudflareTunnelMetadata, listSvc[i])
 					err := pkg.UpdateCmpProperty(computeClient, vm, key, val)
 					if err != nil {
-						log.Fatal(err)
+						Log.Error(err)
+						continue
 					}
 				}
 			} else {
-				log.Fatalln("tunnel provider not found")
+				Log.Fatal("tunnel provider not found")
 			}
 
 			tunnelVMs.AppendTunnels([]tunnel.VmTunnel{newTunnelVM})
@@ -188,7 +200,7 @@ func checkNewVMs() {
 }
 
 func checkTunnelVMs() {
-	log.Println("Check all vms with ngrok tunnel metadata")
+	Log.Info("Check all vms with ngrok tunnel metadata")
 	computeClient := pkg.InitComputeClient(context.Background())
 	Prov := tunnelVMs.TunProvider
 	NG := Prov.NG
@@ -199,12 +211,12 @@ func checkTunnelVMs() {
 		vm := servers.Get(context.Background(), computeClient, tunnelVM.VMID)
 		if vm.Err != nil {
 			if NG.Active {
-				log.Printf("Server not found, delete all ngrok tunnel, name=%v id=%v", tunnelVM.VMname, tunnelVM.VMID)
+				Log.Printf("Server not found, delete all ngrok tunnel, name=%v id=%v", tunnelVM.VMname, tunnelVM.VMID)
 				tunnelVM.StopNgrok(NG, "")
 				tunnelVMs.RemoveTunnelsByIndex(index)
 				continue
 			} else if CF.Active {
-				log.Printf("Server not found, delete all cloudflare tunnel, name=%v id=%v", tunnelVM.VMname, tunnelVM.VMID)
+				Log.Printf("Server not found, delete all cloudflare tunnel, name=%v id=%v", tunnelVM.VMname, tunnelVM.VMID)
 				err := tunnelVM.StopCloudFlare(CF, "")
 				if err != nil {
 					log.Fatal(err)
@@ -227,7 +239,7 @@ func checkTunnelVMs() {
 			}
 		}
 
-		log.Printf("Check VM with tunnel property, name=%v id=%v", vmServer.Name, vmServer.ID)
+		Log.Printf("Check VM with tunnel property, name=%v id=%v", vmServer.Name, vmServer.ID)
 		removedSvc, err := tunnelVM.CheckRemovedSvc(tunnelSvc, Prov, computeClient, vmServer)
 		if err != nil {
 			log.Fatal(err)
