@@ -12,21 +12,21 @@ import (
 	"github.com/justhumanz/openstack-tunnel-as-service/internal/pkg/db"
 	"github.com/justhumanz/openstack-tunnel-as-service/internal/pkg/tunnel"
 	"github.com/justhumanz/openstack-tunnel-as-service/pkg"
-	Log "github.com/sirupsen/logrus"
 )
 
 var (
-	tunnelVMs = tunnel.TunnelData{}
+	Log = pkg.Log // Use the log from pkg/log.go
 )
 
 type SchedulerOps struct {
+	TunnelVMs           *tunnel.TunnelData
 	ServerListOps       servers.ListOpts
 	CheckVMSInterval    time.Duration
 	CheckTunnelInterval time.Duration
 }
 
 func (i *SchedulerOps) StartScheduler() error {
-	Log.Info("Starting scheduler")
+	Log.Info("Starting tunnel as service scheduler")
 
 	// create a scheduler
 	s, err := gocron.NewScheduler()
@@ -40,8 +40,7 @@ func (i *SchedulerOps) StartScheduler() error {
 			i.CheckVMSInterval,
 		),
 		gocron.NewTask(
-			checkNewVMs,
-			i.ServerListOps,
+			i.checkNewVMs,
 		),
 	)
 	if err != nil {
@@ -55,7 +54,7 @@ func (i *SchedulerOps) StartScheduler() error {
 			i.CheckTunnelInterval,
 		),
 		gocron.NewTask(
-			checkTunnelVMs,
+			i.checkTunnelVMs,
 		),
 	)
 	if err != nil {
@@ -68,11 +67,12 @@ func (i *SchedulerOps) StartScheduler() error {
 	return nil
 }
 
-func checkNewVMs(ops servers.ListOpts) {
+func (i *SchedulerOps) checkNewVMs() {
 	Log.Info("Start checking vms with tunnel property")
+	TunnelVMs := i.TunnelVMs
 	ctx := context.Background()
 	computeClient := pkg.InitComputeClient(ctx)
-	allPages, err := servers.List(computeClient, ops).AllPages(ctx)
+	allPages, err := servers.List(computeClient, i.ServerListOps).AllPages(ctx)
 	if err != nil {
 		Log.Error(err)
 		return
@@ -84,13 +84,13 @@ func checkNewVMs(ops servers.ListOpts) {
 		return
 	}
 
-	lenTunTmp := len(tunnelVMs.Tunnels)
+	lenTunTmp := len(TunnelVMs.Tunnels)
 
 	for _, vm := range vms {
 		metaData := vm.Metadata["tunnel"]
 
 		// If the vm already in list we should skip it
-		if !tunnelVMs.GetVMTun(vm.ID) && metaData != "" {
+		if !TunnelVMs.GetVMTun(vm.ID) && metaData != "" {
 			newTunnelVM := tunnel.VmTunnel{
 				VMname: vm.Name,
 				VMID:   vm.ID,
@@ -105,8 +105,8 @@ func checkNewVMs(ops servers.ListOpts) {
 				continue
 			}
 
-			if tunnelVMs.TunProvider.NG.Active {
-				err := newTunnelVM.SetNgrok(tunnelVMs.TunProvider.NG)
+			if TunnelVMs.TunProvider.NG.Active {
+				err := newTunnelVM.SetNgrok(TunnelVMs.TunProvider.NG)
 				if err != nil {
 					Log.Error(err)
 					continue
@@ -122,8 +122,8 @@ func checkNewVMs(ops servers.ListOpts) {
 					}
 				}
 
-			} else if tunnelVMs.TunProvider.CF.Active {
-				err := newTunnelVM.SetCloudFlare(tunnelVMs.TunProvider.CF, true)
+			} else if TunnelVMs.TunProvider.CF.Active {
+				err := newTunnelVM.SetCloudFlare(TunnelVMs.TunProvider.CF, true)
 				if err != nil {
 					Log.Error(err)
 					continue
@@ -142,31 +142,33 @@ func checkNewVMs(ops servers.ListOpts) {
 				Log.Fatal("tunnel provider not found")
 			}
 
-			tunnelVMs.AppendTunnels([]tunnel.VmTunnel{newTunnelVM})
+			TunnelVMs.AppendTunnels([]tunnel.VmTunnel{newTunnelVM})
 		}
 	}
 
-	if lenTunTmp != len(tunnelVMs.Tunnels) {
-		db.SaveTunnels(tunnelVMs.Tunnels)
+	if lenTunTmp != len(TunnelVMs.Tunnels) {
+		err := db.SaveTunnels(TunnelVMs.Tunnels)
+		if err != nil {
+			Log.Error(err)
+		}
 	}
-
 }
 
-func checkTunnelVMs() {
+func (i *SchedulerOps) checkTunnelVMs() {
 	Log.Info("Check all vms with ngrok tunnel metadata")
+	TunnelVMs := i.TunnelVMs
 	computeClient := pkg.InitComputeClient(context.Background())
-	Prov := tunnelVMs.TunProvider
+	Prov := TunnelVMs.TunProvider
 	NG := Prov.NG
 	CF := Prov.CF
 
 	updateDB := false
-	for index, tunnelVM := range tunnelVMs.Tunnels {
+	for index, tunnelVM := range TunnelVMs.Tunnels {
 		vm := servers.Get(context.Background(), computeClient, tunnelVM.VMID)
 		if vm.Err != nil {
 			if NG.Active {
 				Log.Infof("Server not found, delete all ngrok tunnel, name=%v id=%v", tunnelVM.VMname, tunnelVM.VMID)
 				tunnelVM.StopNgrok(NG, "")
-				tunnelVMs.RemoveTunnelsByIndex(index)
 				continue
 			} else if CF.Active {
 				Log.Infof("Server not found, delete all cloudflare tunnel, name=%v id=%v", tunnelVM.VMname, tunnelVM.VMID)
@@ -175,9 +177,10 @@ func checkTunnelVMs() {
 					Log.Error(err)
 					continue
 				}
-				tunnelVMs.RemoveTunnelsByIndex(index)
 				continue
 			}
+
+			TunnelVMs.RemoveTunnelsByIndex(index)
 		}
 
 		vmServer, err := vm.Extract()
@@ -213,7 +216,9 @@ func checkTunnelVMs() {
 	}
 
 	if updateDB {
-		db.SaveTunnels(tunnelVMs.Tunnels)
+		err := db.SaveTunnels(TunnelVMs.Tunnels)
+		if err != nil {
+			Log.Error(err)
+		}
 	}
-
 }

@@ -12,24 +12,28 @@ import (
 )
 
 // Check if the tunnel openstack already created
-func (i *CloudFlare) CheckCFTunnel() bool {
+func (i *CloudFlare) CheckCFTunnel() (bool, error) {
 	cmd := exec.Command(i.CloudflaredPath, "tunnel", "list", "--output", "json")
 	output, err := cmd.Output()
 	if err != nil {
-		log.Fatalln(err)
+		return false, err
 	}
 
 	tunnelList := []map[string]interface{}{}
 
 	if err := json.Unmarshal(output, &tunnelList); err != nil {
-		log.Fatalln(err)
+		return false, err
 	}
 
 	for _, tunnel := range tunnelList {
 		if tunnel["name"].(string) == config.TunnelName {
 			i.TunnelID = tunnel["id"].(string)
 			i.TunnelName = tunnel["name"].(string)
-			CerdPath := i.CFTunnelCerd()
+			CerdPath, err := i.CFTunnelCerd()
+			if err != nil {
+				return false, err
+			}
+
 			if _, err := os.Stat(CerdPath); err != nil {
 				log.Println("Tunnel credential not found, creating tunnel credential", CerdPath)
 				cmd := exec.Command(i.CloudflaredPath, "tunnel", "token", "--cred-file", CerdPath, config.TunnelName)
@@ -40,36 +44,38 @@ func (i *CloudFlare) CheckCFTunnel() bool {
 				}
 			}
 
-			return true
+			return true, nil
 		}
 	}
 
-	return false
+	return false, nil
 }
 
 // If the tunnel not yet created need to create it first
-func (i *CloudFlare) CreateCFTunnel() {
+func (i *CloudFlare) CreateCFTunnel() error {
 	cmd := exec.Command(i.CloudflaredPath, "tunnel", "create", "--output", "json", config.TunnelName)
 	output, err := cmd.Output()
 	if err != nil {
-		log.Fatalln(err)
+		return err
 	}
 
 	var tunnel TunnelCreate
 	if err := json.Unmarshal(output, &tunnel); err != nil {
-		log.Fatalln(err)
+		return err
 	}
 
 	i.TunnelID = tunnel.ID
 	i.TunnelName = tunnel.Name
+
+	return nil
 }
 
-func (i *CloudFlare) CFTunnelCerd() string {
+func (i *CloudFlare) CFTunnelCerd() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		panic(err)
+		return "", err
 	}
-	return fmt.Sprintf("%v/.cloudflared/%v.json", home, i.TunnelID)
+	return fmt.Sprintf("%v/.cloudflared/%v.json", home, i.TunnelID), nil
 }
 
 func (i *CloudFlare) InitTunnel() error {
@@ -77,9 +83,13 @@ func (i *CloudFlare) InitTunnel() error {
 	if err != nil && tunnelCfg.Tunnel == "" {
 		log.Println(err)
 
+		crt, err := i.CFTunnelCerd()
+		if err != nil {
+			return err
+		}
 		tunnelCfg = TunnelConfig{
 			Tunnel:          i.TunnelID,
-			CredentialsFile: i.CFTunnelCerd(),
+			CredentialsFile: crt,
 			OriginRequest: struct {
 				ConnectTimeout string "yaml:\"connectTimeout\""
 			}{
@@ -123,7 +133,6 @@ func (i *CloudFlare) ValidateCFcfg() error {
 
 // Start new cloudflared
 func (i *CloudFlare) StartCF() error {
-
 	cmd := exec.Command(i.CloudflaredPath, "tunnel", "--config", config.CFconfig, "run", config.TunnelName)
 	err := cmd.Start()
 	if err != nil {
@@ -187,7 +196,7 @@ func (i *CloudFlare) StopCFIngress(VMService string) error {
 
 	err = i.ValidateCFcfg()
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	return i.ReloadCF()

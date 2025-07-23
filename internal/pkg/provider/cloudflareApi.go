@@ -12,7 +12,12 @@ import (
 	"github.com/cloudflare/cloudflare-go/v4/option"
 	"github.com/cloudflare/cloudflare-go/v4/zones"
 	"github.com/justhumanz/openstack-tunnel-as-service/internal/config"
+	"github.com/justhumanz/openstack-tunnel-as-service/pkg"
 	"gopkg.in/yaml.v2"
+)
+
+var (
+	Log = pkg.Log
 )
 
 const argoTunnel = "cfargotunnel.com"
@@ -68,7 +73,7 @@ func (i *CloudFlare) AddTunnelDNS(dnsRec string) error {
 
 // Read cf config file
 func ReadCloudFlareConfig() (TunnelConfig, error) {
-	log.Printf("Read %v file", config.CFconfig)
+	Log.Infof("Read %v file", config.CFconfig)
 	data, err := os.ReadFile(config.CFconfig)
 	if err != nil {
 		return TunnelConfig{}, err
@@ -84,13 +89,13 @@ func ReadCloudFlareConfig() (TunnelConfig, error) {
 }
 
 func WriteCloudFlareConfig(tunconf TunnelConfig) {
-	log.Printf("Write %v file", config.CFconfig)
+	Log.Infof("Write %v file", config.CFconfig)
 	newData, err := yaml.Marshal(&tunconf)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	log.Printf("Update %v file", config.CFconfig)
+	Log.Infof("Update %v file", config.CFconfig)
 	if err := os.WriteFile(config.CFconfig, newData, 0644); err != nil {
 		log.Fatal(err)
 	}
