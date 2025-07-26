@@ -3,7 +3,6 @@ package tunnel
 import (
 	"context"
 	"fmt"
-	"log"
 	"strconv"
 	"strings"
 
@@ -18,7 +17,7 @@ func (i *VmTunnel) SetNgrok(v provider.Ngrok) error {
 	for index, svc := range i.VMSvc {
 		vmEndpoint := svc.GetVMEndpoint()
 
-		log.Printf("Start vm tunneling with Ngrok, name=%v id=%v svc=%v", i.VMname, i.VMID, vmEndpoint)
+		Log.Infof("Start vm tunneling with Ngrok, name=%v id=%v svc=%v", i.VMname, i.VMID, vmEndpoint)
 		ngrokRes, err := v.NgrokForwarder(vmEndpoint, nil)
 		if err != nil {
 			return err
@@ -30,7 +29,7 @@ func (i *VmTunnel) SetNgrok(v provider.Ngrok) error {
 			"port": func() int {
 				num, err := strconv.Atoi(strings.Split(res, ":")[1])
 				if err != nil {
-					log.Fatalln(err)
+					Log.Panic(err)
 				}
 				return num
 			}(),
@@ -53,14 +52,14 @@ func (i *VmTunnel) StopNgrok(v provider.Ngrok, TvmEndpoint string) {
 func (i *TunnelData) InitNGCtx() {
 	if i.TunProvider.NG.Active {
 		if !i.TunProvider.NG.StaticURLs {
-			log.Printf("Ngrok static url is %v deleting all ngrok tunnels", i.TunProvider.NG.StaticURLs)
+			Log.Infof("Ngrok static url is %v deleting all ngrok tunnels", i.TunProvider.NG.StaticURLs)
 
 			for index, tun := range i.Tunnels {
 				for _, svc := range tun.VMSvc {
 					ep := svc.GetTunnelEndpoint()
 					key := fmt.Sprintf(config.NgrokTunnelMetadata, svc.VMEndpoint["WellKnownPorts"].(string))
 					computeClient := pkg.InitComputeClient(context.Background())
-					log.Printf("Delete ngrok tunnel from vm property, name=%v id=%v svc=%v property=%v", tun.VMname, tun.VMID, ep, key)
+					Log.Infof("Delete ngrok tunnel from vm property, name=%v id=%v svc=%v property=%v", tun.VMname, tun.VMID, ep, key)
 					pkg.RemoveCmpProperty(computeClient, tun.VMID, key)
 				}
 
@@ -68,16 +67,16 @@ func (i *TunnelData) InitNGCtx() {
 				i.RemoveTunnelsByIndex(index)
 			}
 		} else {
-			log.Printf("Ngrok static url is %v starting all ngrok tunnels", i.TunProvider.NG.StaticURLs)
+			Log.Infof("Ngrok static url is %v starting all ngrok tunnels", i.TunProvider.NG.StaticURLs)
 			for _, tun := range i.Tunnels {
 				for _, svc := range tun.VMSvc {
 					vmEndpoint := svc.GetVMEndpoint()
 					tunEndpoint := svc.GetTunnelEndpoint()
-					log.Printf("Starting %v", tunEndpoint)
+					Log.Infof("Starting %v", tunEndpoint)
 
 					_, err := i.TunProvider.NG.NgrokForwarder(vmEndpoint, &tunEndpoint)
 					if err != nil {
-						log.Fatal(err)
+						Log.Fatal(err)
 					}
 				}
 			}

@@ -3,7 +3,6 @@ package provider
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 
@@ -12,12 +11,7 @@ import (
 	"github.com/cloudflare/cloudflare-go/v4/option"
 	"github.com/cloudflare/cloudflare-go/v4/zones"
 	"github.com/justhumanz/openstack-tunnel-as-service/internal/config"
-	"github.com/justhumanz/openstack-tunnel-as-service/pkg"
 	"gopkg.in/yaml.v2"
-)
-
-var (
-	Log = pkg.Log
 )
 
 const argoTunnel = "cfargotunnel.com"
@@ -46,19 +40,62 @@ func (i *CloudFlare) InitAPI() error {
 
 func (i *CloudFlare) AddTunnelDNS(dnsRec string) error {
 	client := i.CFapi.Client
+	ZoneID := cloudflare.String(i.CFapi.ZoneID)
 	Content := fmt.Sprintf("%v.%v", i.TunnelID, argoTunnel)
-	_, err := client.DNS.Records.New(context.Background(), dns.RecordNewParams{
-		ZoneID: cloudflare.String(i.CFapi.ZoneID),
-		Body: dns.CNAMERecordParam{
-			Name:    cloudflare.String(dnsRec),
-			Content: cloudflare.String(Content),
-			Type:    cloudflare.Raw[dns.CNAMERecordType](dns.CNAMERecordTypeCNAME),
-			Proxied: cloudflare.Bool(true),
-			Comment: cloudflare.String("Created by openstack tunnel"),
-		},
-	})
+
+	isNewDns, dnsResp, err := i.CheckDomainName(dnsRec)
+	if err != nil {
+		return err
+	}
+
+	if !isNewDns {
+		_, err = client.DNS.Records.New(context.Background(), dns.RecordNewParams{
+			ZoneID: ZoneID,
+			Body: dns.CNAMERecordParam{
+				Name:    cloudflare.String(dnsRec),
+				Content: cloudflare.String(Content),
+				Type:    cloudflare.Raw[dns.CNAMERecordType](dns.CNAMERecordTypeCNAME),
+				Proxied: cloudflare.Bool(true),
+				Comment: cloudflare.String("Created by openstack tunnel"),
+			},
+		})
+	} else {
+		_, err = client.DNS.Records.Update(context.Background(), dnsResp.ID, dns.RecordUpdateParams{
+			ZoneID: ZoneID,
+			Body: dns.CNAMERecordParam{
+				Name:    cloudflare.String(dnsRec),
+				Content: cloudflare.String(Content),
+				Type:    cloudflare.Raw[dns.CNAMERecordType](dns.CNAMERecordTypeCNAME),
+				Proxied: cloudflare.Bool(true),
+				Comment: cloudflare.String("Created by openstack tunnel"),
+			},
+		})
+	}
 
 	return err
+}
+
+// CheckDomainName checks if the given domain name exists in the Cloudflare zone
+func (i *CloudFlare) CheckDomainName(dnsRec string) (bool, *dns.RecordResponse, error) {
+	client := i.CFapi.Client
+
+	// List DNS records in the zone filtered by the name
+	records, err := client.DNS.Records.List(context.Background(), dns.RecordListParams{
+		ZoneID: cloudflare.String(i.CFapi.ZoneID),
+	})
+	if err != nil {
+		return false, nil, err
+	}
+
+	for _, v := range records.Result {
+		sub := strings.Split(v.Name, ".")
+		if strings.EqualFold(sub[0], dnsRec) {
+			Log.Infof("Domain %v already exists", dnsRec)
+			return true, &v, nil
+		}
+	}
+
+	return false, nil, nil
 }
 
 // TODO: Add deleting dns trough CF API
@@ -92,11 +129,11 @@ func WriteCloudFlareConfig(tunconf TunnelConfig) {
 	Log.Infof("Write %v file", config.CFconfig)
 	newData, err := yaml.Marshal(&tunconf)
 	if err != nil {
-		log.Fatal(err)
+		Log.Fatal(err)
 	}
 
 	Log.Infof("Update %v file", config.CFconfig)
 	if err := os.WriteFile(config.CFconfig, newData, 0644); err != nil {
-		log.Fatal(err)
+		Log.Fatal(err)
 	}
 }

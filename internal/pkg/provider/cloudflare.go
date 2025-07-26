@@ -3,7 +3,6 @@ package provider
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"time"
@@ -35,12 +34,12 @@ func (i *CloudFlare) CheckCFTunnel() (bool, error) {
 			}
 
 			if _, err := os.Stat(CerdPath); err != nil {
-				log.Println("Tunnel credential not found, creating tunnel credential", CerdPath)
+				Log.Info("Tunnel credential not found, creating tunnel credential", CerdPath)
 				cmd := exec.Command(i.CloudflaredPath, "tunnel", "token", "--cred-file", CerdPath, config.TunnelName)
 				cmd.Stderr = os.Stderr
 				_, err = cmd.Output()
 				if err != nil {
-					log.Fatalln(err)
+					Log.Fatalln(err)
 				}
 			}
 
@@ -81,7 +80,7 @@ func (i *CloudFlare) CFTunnelCerd() (string, error) {
 func (i *CloudFlare) InitTunnel() error {
 	tunnelCfg, err := ReadCloudFlareConfig()
 	if err != nil && tunnelCfg.Tunnel == "" {
-		log.Println(err)
+		Log.Warn(err)
 
 		crt, err := i.CFTunnelCerd()
 		if err != nil {
@@ -105,13 +104,13 @@ func (i *CloudFlare) InitTunnel() error {
 
 	WriteCloudFlareConfig(tunnelCfg)
 
-	log.Println("Validate config")
+	Log.Info("Validate config")
 	err = i.ValidateCFcfg()
 	if err != nil {
 		return err
 	}
 
-	log.Printf("Starting %v", i.CloudflaredPath)
+	Log.Infof("Starting %v", i.CloudflaredPath)
 	err = i.StartCF()
 	if err != nil {
 		return err
@@ -146,7 +145,7 @@ func (i *CloudFlare) StartCF() error {
 
 // Reload the cloudflared
 func (i *CloudFlare) ReloadCF() error {
-	log.Printf("Reloading %v", i.CloudflaredPath)
+	Log.Infof("Reloading %v", i.CloudflaredPath)
 	err := i.CloudFlareCmd.Process.Kill()
 	if err != nil {
 		return err
@@ -174,7 +173,7 @@ func (i *CloudFlare) AddCFIngress(VMHostname, VMService string) error {
 
 	err = i.ValidateCFcfg()
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	return i.ReloadCF()

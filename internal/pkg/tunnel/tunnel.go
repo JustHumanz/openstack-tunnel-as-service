@@ -11,6 +11,10 @@ import (
 	"github.com/justhumanz/openstack-tunnel-as-service/pkg"
 )
 
+var (
+	Log = pkg.Log
+)
+
 type TunnelData struct {
 	TunProvider provider.Provider
 	Tunnels     []VmTunnel

@@ -2,7 +2,6 @@ package tunnel
 
 import (
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/justhumanz/openstack-tunnel-as-service/internal/pkg/provider"
@@ -21,14 +20,14 @@ func (i *VmTunnel) SetCloudFlare(v provider.CloudFlare, dns bool) error {
 		sub := strings.Join([]string{id, prefix}, "-")
 		vmDns := fmt.Sprintf("%v.%v", sub, domain)
 
-		log.Printf("Start vm tunneling with CloudFlare, name=%v id=%v svc=%v hostname=%v", i.VMname, i.VMID, vmEndpoint, vmDns)
+		Log.Infof("Start vm tunneling with CloudFlare, name=%v id=%v svc=%v hostname=%v", i.VMname, i.VMID, vmEndpoint, vmDns)
 		err := v.AddCFIngress(vmDns, vmEndpoint)
 		if err != nil {
 			return err
 		}
 
 		if dns {
-			log.Printf("Create DNS Records, name=%v id=%v subdomain=%v", i.VMname, i.VMID, sub)
+			Log.Infof("Create DNS Records, name=%v id=%v subdomain=%v", i.VMname, i.VMID, sub)
 			err = v.AddTunnelDNS(sub)
 			if err != nil {
 				return err
