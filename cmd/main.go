@@ -20,6 +20,7 @@ var (
 	tunnelVMs         = tunnel.TunnelData{}
 	cloudflaredBin    = flag.String("cf", "/usr/bin/cloudflared", "The binary of cloudflared")
 	cloudflaredDomain = flag.String("domain", "example.com", "The Domain of your cloudflare")
+	apiPort           = flag.Int("port", 8080, "The port for the API server")
 	Log               = pkg.Log // Use the log from pkg/log.go
 )
 
@@ -101,7 +102,7 @@ func main() {
 
 	apiOps := api.APIops{
 		TunnelVMs:  &tunnelVMs,
-		ListenPort: 8080,
+		ListenPort: *apiPort,
 	}
 
 	Log.Info("Starting API server")
