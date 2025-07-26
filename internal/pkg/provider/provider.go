@@ -5,6 +5,11 @@ import (
 	"os/exec"
 
 	"github.com/cloudflare/cloudflare-go/v4"
+	"github.com/justhumanz/openstack-tunnel-as-service/pkg"
+)
+
+var (
+	Log = pkg.Log
 )
 
 type Provider struct {

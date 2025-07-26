@@ -17,7 +17,7 @@ type VmTunnelJson struct {
 
 // saveTunnels saves the current tunnelVMs to a JSON file.
 // It creates the file if it does not exist and overwrites it if it does.
-func SaveTunnels(Data []tunnel.VmTunnel) {
+func SaveTunnels(Data []tunnel.VmTunnel) error {
 	log.Printf("Save tunnel data into %v", config.TunnelData)
 	tunnelVMsJson := []VmTunnelJson{}
 	for _, v := range Data {
@@ -30,30 +30,35 @@ func SaveTunnels(Data []tunnel.VmTunnel) {
 
 	jsonData, err := json.MarshalIndent(tunnelVMsJson, "", "  ") // pretty-print
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	err = os.WriteFile(config.TunnelData, jsonData, 0644)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
+
+	return nil
 }
 
-func LoadTunnels() []tunnel.VmTunnel {
+func LoadTunnels() ([]tunnel.VmTunnel, error) {
 	var Data []tunnel.VmTunnel
 	if _, err := os.Stat(config.TunnelData); err != nil {
-		SaveTunnels(Data) // Create file if it does not exist
+		err = SaveTunnels(Data) // Create file if it does not exist
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	tunnelVMsJson := []VmTunnelJson{}
 	rawData, err := os.ReadFile(config.TunnelData)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
 	err = json.Unmarshal(rawData, &tunnelVMsJson)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
 	for index := range tunnelVMsJson {
@@ -64,5 +69,5 @@ func LoadTunnels() []tunnel.VmTunnel {
 		})
 
 	}
-	return Data
+	return Data, nil
 }
