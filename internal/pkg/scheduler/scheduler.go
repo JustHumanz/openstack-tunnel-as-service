@@ -169,23 +169,30 @@ func (i *SchedulerOps) checkTunnelVMs() {
 			if NG.Active {
 				Log.Infof("Server not found, delete all ngrok tunnel, name=%v id=%v", tunnelVM.VMname, tunnelVM.VMID)
 				tunnelVM.StopNgrok(NG, "")
-				continue
 			} else if CF.Active {
 				Log.Infof("Server not found, delete all cloudflare tunnel, name=%v id=%v", tunnelVM.VMname, tunnelVM.VMID)
 				err := tunnelVM.StopCloudFlare(CF, "")
 				if err != nil {
 					Log.Error(err)
-					continue
 				}
-				continue
 			}
 
 			TunnelVMs.RemoveTunnelsByIndex(index)
+			err := db.SaveTunnels(TunnelVMs.Tunnels)
+			if err != nil {
+				Log.Error(err)
+			}
+
+			continue
 		}
 
 		vmServer, err := vm.Extract()
 		if err != nil {
 			Log.Error(err)
+		}
+
+		// Skip vm if its not active
+		if vmServer.Status != "ACTIVE" {
 			continue
 		}
 

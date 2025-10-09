@@ -54,7 +54,8 @@ func init() {
 				CloudflaredPath: *cloudflaredBin,
 				Domain:          *cloudflaredDomain,
 				SubDomainPrefix: map[string]string{ //TODO
-					"ssh": "ssh",
+					"ssh":  "ssh",
+					"http": "http",
 				},
 				Active: true,
 			},

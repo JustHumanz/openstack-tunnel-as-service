@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"regexp"
 	"time"
@@ -72,7 +71,7 @@ func InitComputeClient(ctx context.Context) *gophercloud.ServiceClient {
 }
 
 func UpdateCmpProperty(cmp *gophercloud.ServiceClient, vm servers.Server, key, value string) error {
-	log.Printf("Update vm property, name=%v id=%v key=%v value=%v", vm.Name, vm.ID, key, value)
+	Log.Infof("Update vm property, name=%v id=%v key=%v value=%v", vm.Name, vm.ID, key, value)
 	r := servers.UpdateMetadata(context.Background(), cmp, vm.ID, servers.MetadataOpts{key: value})
 	if r.Err != nil {
 		return r.Err
@@ -84,6 +83,6 @@ func UpdateCmpProperty(cmp *gophercloud.ServiceClient, vm servers.Server, key, v
 func RemoveCmpProperty(cmp *gophercloud.ServiceClient, vmid, metadata string) {
 	r := servers.DeleteMetadatum(context.Background(), cmp, vmid, metadata)
 	if r.Err != nil {
-		log.Fatal(r.Err)
+		Log.Error(r.Err)
 	}
 }
