@@ -1,5 +1,6 @@
 package api
 
+/*
 import (
 	"encoding/json"
 	"fmt"
@@ -99,3 +100,4 @@ func (i *APIops) DeleteVmTunnelsHandler(w http.ResponseWriter, r *http.Request) 
 		})
 	}
 }
+*/

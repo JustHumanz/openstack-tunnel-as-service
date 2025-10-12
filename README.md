@@ -47,7 +47,7 @@ go build -o tunnel-service main.go
 5. Start Labeling VMS
 
 ```bash
-openstack server set --property tunnel='ssh' cirros
+openstack server set --property tunnel='22' cirros
 # wait until service pickup vm metadata property
 openstack server show cirros 
 ```

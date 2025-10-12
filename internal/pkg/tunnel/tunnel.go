@@ -2,10 +2,10 @@ package tunnel
 
 import (
 	"fmt"
-	"log"
+	"strconv"
+	"strings"
 
 	"github.com/gophercloud/gophercloud/v2"
-	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/servers"
 	"github.com/justhumanz/openstack-tunnel-as-service/internal/config"
 	"github.com/justhumanz/openstack-tunnel-as-service/internal/pkg/provider"
 	"github.com/justhumanz/openstack-tunnel-as-service/pkg"
@@ -17,156 +17,271 @@ var (
 
 type TunnelData struct {
 	TunProvider provider.Provider
-	Tunnels     []VmTunnel
+	Tunnels     []InstanceTunnel
 }
 
-type VmTunnel struct {
-	VMname string  `json:"VMName"`
-	VMID   string  `json:"VMID"`
-	VMSvc  []VmSvc `json:"VMSvc"`
+type InstanceTunnel struct {
+	InstanceName string            `json:"InstanceName"`
+	InstanceID   string            `json:"InstanceID"`
+	ActiveIP     string            `json:"ActiveIP"`
+	SVC          []InstanceService `json:"Svc"`
 }
 
-type VmSvc struct {
-	TunnelEndpoint map[string]any `json:"TunnelEndpoint"`
-	VMEndpoint     map[string]any `json:"VMEndpoint"`
+type InstanceService struct {
+	InstanceEndpoint Svc `json:"InstanceEndpoint"`
 }
 
-func (i *VmTunnel) RemoveSvcByIndex(index int) {
-	i.VMSvc = append(i.VMSvc[:index], i.VMSvc[index+1:]...)
+type Svc struct {
+	Port           int
+	PortName       string
+	Endpoint       string
+	TunnelEndpoint *Svc
 }
 
-func (i *TunnelData) RemoveTunnelsByIndex(index int) {
-	i.Tunnels = append(i.Tunnels[:index], i.Tunnels[index+1:]...)
-}
-
-func (i *TunnelData) AppendTunnels(newTunnel []VmTunnel) {
-	i.Tunnels = append(i.Tunnels, newTunnel...)
-}
-
-func (i *TunnelData) GetVMTun(vmID string) bool {
-	for _, v := range i.Tunnels {
-		if v.VMID == vmID {
-			return true
+// Update the tunnels data
+func (tunData *TunnelData) UpdateTunnelData(new InstanceTunnel) {
+	for i, v := range tunData.Tunnels {
+		if v.InstanceID == new.InstanceID {
+			tunData.Tunnels[i] = new
 		}
 	}
-	return false
 }
 
-func (i *VmTunnel) GetVMSvc() []string {
-	var vmSvcList []string
-	for _, v := range i.VMSvc {
-		vmSvcList = append(vmSvcList, v.VMEndpoint["WellKnownPorts"].(string))
+// Get the current metadata on of Instance
+func (insTun *InstanceTunnel) GetInstanceMetadata() []string {
+	metadata := []string{}
+	for _, v := range insTun.SVC {
+		metadata = append(metadata, strconv.Itoa(v.InstanceEndpoint.Port))
 	}
-	return vmSvcList
+	return metadata
 }
 
-func (i *VmTunnel) CheckRemovedSvc(newVMSvc []string, v provider.Provider, computeClient *gophercloud.ServiceClient, vm *servers.Server) ([]string, error) {
-	currentVMSvc := i.GetVMSvc()
-	diff := pkg.Difference(newVMSvc, currentVMSvc)
-	if diff != nil {
-		log.Printf("Existing VM removed some tunnel property, name=%v id=%v removed svc=%v", i.VMname, i.VMID, diff)
-		for _, removedSvc := range diff {
-			removedPort := config.ServiceID[removedSvc]
-			for _, svc := range i.VMSvc {
-				if svc.VMEndpoint["port"].(int) == removedPort {
-					svcEndpoint := svc.GetVMEndpoint()
-					if v.NG.Active {
-						log.Printf("Stop ngrok tunnel, name=%v id=%v svc=%v", vm.Name, vm.ID, svcEndpoint)
-						v.NG.NgrokStop(svcEndpoint)
-						key := fmt.Sprintf(config.NgrokTunnelMetadata, removedSvc)
-						log.Printf("Delete ngrok tunnel from vm property, name=%v id=%v svc=%v property=%v", vm.Name, vm.ID, svcEndpoint, key)
-						pkg.RemoveCmpProperty(computeClient, i.VMID, key)
+func (insTun *InstanceTunnel) UpdateInstace(newMetadata []string, Prov provider.Provider) ([]string, []string, error) {
+	var removedEP, newEP []string
+	oldMetadata := insTun.GetInstanceMetadata()
+	removedTmp := pkg.Difference(oldMetadata, newMetadata)
+	newTmp := pkg.Difference(newMetadata, oldMetadata)
 
-					} else if v.CF.Active {
-						log.Printf("Stop cloduflare tunnel, name=%v id=%v svc=%v", vm.Name, vm.ID, svcEndpoint)
-						err := v.CF.StopCFIngress(svcEndpoint)
-						if err != nil {
-							return nil, nil
-						}
-
-						key := fmt.Sprintf(config.CloudflareTunnelMetadata, removedSvc)
-						log.Printf("Delete cloduflare tunnel from vm property, name=%v id=%v svc=%v property=%v", vm.Name, vm.ID, svcEndpoint, key)
-						pkg.RemoveCmpProperty(computeClient, i.VMID, key)
+	Log.Infof("Instance update existing tunnel, Removed svc=%v New Svc=%v", removedTmp, newTmp)
+	if removedTmp != nil {
+		for _, v := range insTun.SVC {
+			for _, k := range removedTmp {
+				if strconv.Itoa(v.InstanceEndpoint.Port) == k {
+					err := insTun.DeleteCFTunnel(v, Prov)
+					if err != nil {
+						return nil, nil, err
 					}
+					removedEP = append(removedEP, v.InstanceEndpoint.Endpoint)
 				}
 			}
 		}
 	}
 
-	return diff, nil
+	if newTmp != nil {
+		eps, err := insTun.ParseNewSVC(newTmp)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		newEP = eps
+
+		err = insTun.AddSVC(eps)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		switch {
+		case Prov.CF.Active:
+			err = insTun.AddCFTunnel(Prov)
+			if err != nil {
+				return nil, nil, err
+			}
+		case Prov.NG.Active:
+
+		default:
+			Log.Error("Invalid Provider")
+		}
+
+	}
+
+	return removedEP, newEP, nil
 }
 
-func (i *VmTunnel) CheckUpdatedSvc(newVMSvc []string, v provider.Provider, computeClient *gophercloud.ServiceClient, vm *servers.Server) ([]string, error) {
-	currentVMSvc := i.GetVMSvc()
-	diff := pkg.Difference(currentVMSvc, newVMSvc)
-	if diff != nil {
-		log.Printf("Existing VM update some tunnel property, name=%v id=%v updated svc=%v", i.VMname, i.VMID, diff)
-		err := i.SetVMSvc(diff, vm.Addresses)
+// Parse the New Tunnel to 127.0.0.1:22 and testing the connection
+func (insTun *InstanceTunnel) ParseNewSVC(tunMetadata []string) ([]string, error) {
+	var newSVCs []string
+	for _, v := range tunMetadata {
+
+		i, err := strconv.Atoi(v)
 		if err != nil {
 			return nil, err
 		}
 
-		if v.NG.Active {
-			return diff, i.SetNgrok(v.NG)
-		} else if v.CF.Active {
-			return diff, i.SetCloudFlare(v.CF, true)
+		ep := fmt.Sprintf("%s:%d", insTun.ActiveIP, i)
+		Log.Infof("Testing TCP Connection to %s", ep)
+		if !pkg.TestInstanceEP(ep) {
+			continue
 		}
+
+		newSVCs = append(newSVCs, ep)
 	}
 
-	return diff, nil
+	return newSVCs, nil
 }
 
-func (i *VmTunnel) SetVMSvc(listSvc []string, ips map[string]any) error {
-	vmIPs := fmt.Sprintf("%v", ips)
-	for _, v := range listSvc {
-		svcPort := config.ServiceID[v]
-		if svcPort != 0 {
-			activeIPaddr, err := pkg.FindVMactiveIP(vmIPs, svcPort)
-			if err != nil {
-				return err
-			}
-
-			i.VMSvc = append(i.VMSvc, VmSvc{
-				VMEndpoint: map[string]any{
-					"WellKnownPorts": v,
-					"address":        activeIPaddr,
-					"port":           svcPort,
-				},
-			})
-		} else {
-			return fmt.Errorf("unsupported %v endpoint", v)
+// Add the new service from metadata into SVC struct
+func (insTun *InstanceTunnel) AddSVC(eps []string) error {
+	for _, ep := range eps {
+		tmpep := strings.Split(ep, ":")
+		PortNum, err := strconv.Atoi(tmpep[1])
+		if err != nil {
+			return err
 		}
+		PortName := config.GetKnowPort(PortNum)
+		insTun.SVC = append(insTun.SVC, InstanceService{
+			InstanceEndpoint: Svc{
+				Port:     PortNum,
+				PortName: PortName,
+				Endpoint: ep,
+			},
+		})
 	}
 
 	return nil
-
 }
 
-func (i *VmTunnel) GetVMEndpoints() []string {
-	var endPointList []string
-	for _, v := range i.VMSvc {
-		endPointList = append(endPointList, v.GetVMEndpoint())
+func (tun *TunnelData) AddNewTun(newTun *InstanceTunnel, newTunMetaData []string) error {
+	eps, err := newTun.ParseNewSVC(newTunMetaData)
+	if err != nil {
+		return err
 	}
-	return endPointList
-}
 
-func (i *VmTunnel) GetTunnelEndpoints() []string {
-	var endPointList []string
-	for _, v := range i.VMSvc {
-		endPointList = append(endPointList, v.GetTunnelEndpoint())
+	err = newTun.AddSVC(eps)
+	if err != nil {
+		return err
 	}
-	return endPointList
+
+	switch {
+	case tun.TunProvider.CF.Active:
+		err = newTun.AddCFTunnel(tun.TunProvider)
+		if err != nil {
+			return err
+		}
+	case tun.TunProvider.NG.Active:
+
+	default:
+		Log.Error("Invalid Provider")
+	}
+
+	return nil
 }
 
-func (i *VmSvc) GetTunnelEndpoint() string {
-	vmPort := i.TunnelEndpoint["port"]
-	vmActiveIP := i.TunnelEndpoint["address"]
+func (tun *TunnelData) DeleteTun(deleteTun *InstanceTunnel) error {
+	if tun.TunProvider.CF.Active {
+		Log.Infof("Server not found, delete all cloudflare tunnel, name=%v id=%v", deleteTun.InstanceName, deleteTun.InstanceID)
+		return deleteTun.DeleteCFTunnel(InstanceService{}, tun.TunProvider)
 
-	return fmt.Sprintf("%v:%v", vmActiveIP, vmPort)
+	} else if tun.TunProvider.NG.Active {
+		Log.Infof("Server not found, delete all ngrok tunnel, name=%v id=%v", deleteTun.InstanceName, deleteTun.InstanceID)
+		deleteTun.DeleteNGTunnel(tun.TunProvider)
+	}
+
+	return nil
 }
 
-func (i *VmSvc) GetVMEndpoint() string {
-	vmPort := i.VMEndpoint["port"]
-	vmActiveIP := i.VMEndpoint["address"]
-	return fmt.Sprintf("%v:%v", vmActiveIP, vmPort)
+func (instance *InstanceTunnel) UpdateInstanceMetadata(computeClient *gophercloud.ServiceClient, Prov provider.Provider) error {
+	for _, svc := range instance.SVC {
+		key := ""
+		switch {
+		case Prov.CF.Active:
+			key = fmt.Sprintf(config.CloudflareTunnelMetadata, svc.InstanceEndpoint.PortName)
+
+		case Prov.NG.Active:
+			key = fmt.Sprintf(config.NgrokTunnelMetadata, svc.InstanceEndpoint.PortName)
+		}
+		err := pkg.UpdateCmpProperty(computeClient, instance.InstanceID, key, svc.InstanceEndpoint.TunnelEndpoint.Endpoint)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (instance *InstanceTunnel) AddOneInstanceMetadata(computeClient *gophercloud.ServiceClient, Prov provider.Provider, targetEP string) error {
+	for _, svc := range instance.SVC {
+		if svc.InstanceEndpoint.Endpoint != targetEP {
+			continue
+		}
+
+		key := ""
+		switch {
+		case Prov.CF.Active:
+			key = fmt.Sprintf(config.CloudflareTunnelMetadata, svc.InstanceEndpoint.PortName)
+
+		case Prov.NG.Active:
+			key = fmt.Sprintf(config.NgrokTunnelMetadata, svc.InstanceEndpoint.PortName)
+		}
+		err := pkg.UpdateCmpProperty(computeClient, instance.InstanceID, key, svc.InstanceEndpoint.TunnelEndpoint.Endpoint)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (instance *InstanceTunnel) DelAllInstanceMetadata(computeClient *gophercloud.ServiceClient, Prov provider.Provider) error {
+	for _, svc := range instance.SVC {
+		key := ""
+		switch {
+		case Prov.CF.Active:
+			key = fmt.Sprintf(config.CloudflareTunnelMetadata, svc.InstanceEndpoint.PortName)
+
+		case Prov.NG.Active:
+			key = fmt.Sprintf(config.NgrokTunnelMetadata, svc.InstanceEndpoint.PortName)
+		}
+		err := pkg.RemoveCmpProperty(computeClient, instance.InstanceID, key)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (instance *InstanceTunnel) DelOneInstanceMetadata(computeClient *gophercloud.ServiceClient, Prov provider.Provider, targetEP string) error {
+	for _, svc := range instance.SVC {
+		if svc.InstanceEndpoint.Endpoint != targetEP {
+			continue
+		}
+
+		key := ""
+		switch {
+		case Prov.CF.Active:
+			key = fmt.Sprintf(config.CloudflareTunnelMetadata, svc.InstanceEndpoint.PortName)
+
+		case Prov.NG.Active:
+			key = fmt.Sprintf(config.NgrokTunnelMetadata, svc.InstanceEndpoint.PortName)
+		}
+		err := pkg.RemoveCmpProperty(computeClient, instance.InstanceID, key)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (tun *TunnelData) GetVMTun(instanceID string) *InstanceTunnel {
+	for _, v := range tun.Tunnels {
+		if v.InstanceID == instanceID {
+			return &v
+		}
+	}
+	return nil
+}
+
+// Remove the tunnel from the list
+func (tun *TunnelData) RemoveTun(removedTun *InstanceTunnel) {
+	for i := len(tun.Tunnels) - 1; i >= 0; i-- {
+		if tun.Tunnels[i].InstanceID == removedTun.InstanceID {
+			tun.Tunnels = append(tun.Tunnels[:i], tun.Tunnels[i+1:]...)
+		}
+	}
 }

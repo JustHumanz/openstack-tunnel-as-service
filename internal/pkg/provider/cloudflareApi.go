@@ -35,6 +35,8 @@ func (i *CloudFlare) InitAPI() error {
 			i.CFapi.ZoneID = v.ID
 		}
 	}
+
+	fmt.Println(i.CFapi.ZoneID)
 	return nil
 }
 
@@ -48,27 +50,23 @@ func (i *CloudFlare) AddTunnelDNS(dnsRec string) error {
 		return err
 	}
 
+	dnsCnameparm := dns.CNAMERecordParam{
+		Name:    cloudflare.String(dnsRec),
+		Content: cloudflare.String(Content),
+		Type:    cloudflare.Raw[dns.CNAMERecordType](dns.CNAMERecordTypeCNAME),
+		Proxied: cloudflare.Bool(true),
+		Comment: cloudflare.String("Created by openstack tunnel"),
+	}
+
 	if !isNewDns {
 		_, err = client.DNS.Records.New(context.Background(), dns.RecordNewParams{
 			ZoneID: ZoneID,
-			Body: dns.CNAMERecordParam{
-				Name:    cloudflare.String(dnsRec),
-				Content: cloudflare.String(Content),
-				Type:    cloudflare.Raw[dns.CNAMERecordType](dns.CNAMERecordTypeCNAME),
-				Proxied: cloudflare.Bool(true),
-				Comment: cloudflare.String("Created by openstack tunnel"),
-			},
+			Body:   dnsCnameparm,
 		})
 	} else {
 		_, err = client.DNS.Records.Update(context.Background(), dnsResp.ID, dns.RecordUpdateParams{
 			ZoneID: ZoneID,
-			Body: dns.CNAMERecordParam{
-				Name:    cloudflare.String(dnsRec),
-				Content: cloudflare.String(Content),
-				Type:    cloudflare.Raw[dns.CNAMERecordType](dns.CNAMERecordTypeCNAME),
-				Proxied: cloudflare.Bool(true),
-				Comment: cloudflare.String("Created by openstack tunnel"),
-			},
+			Body:   dnsCnameparm,
 		})
 	}
 

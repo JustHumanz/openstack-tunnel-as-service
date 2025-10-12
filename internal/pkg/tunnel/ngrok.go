@@ -1,85 +1,75 @@
 package tunnel
 
 import (
-	"context"
 	"fmt"
-	"strconv"
-	"strings"
 
+	"github.com/gophercloud/gophercloud/v2"
 	"github.com/justhumanz/openstack-tunnel-as-service/internal/config"
 	"github.com/justhumanz/openstack-tunnel-as-service/internal/pkg/provider"
 	"github.com/justhumanz/openstack-tunnel-as-service/pkg"
 )
 
-// Starting tunnel as ngrok backend
-func (i *VmTunnel) SetNgrok(v provider.Ngrok) error {
+// Register new SVC into CloudFlare tunnel
+func (tunData *TunnelData) AddNGTunnel(InsTun *InstanceTunnel) error {
+	NGProvider := tunData.TunProvider.NG
+	for i := range InsTun.SVC {
+		newSVC := InsTun.SVC[i]
+		InstanceEP := newSVC.InstanceEndpoint
+		NGEndpointType := "tcp://"
+		if InstanceEP.PortName == "http" {
+			NGEndpointType = "https://"
+			InstanceEP.Endpoint = fmt.Sprintf("http://%s", InstanceEP.Endpoint)
+		} else {
+			InstanceEP.Endpoint = fmt.Sprintf("tcp://%s", InstanceEP.Endpoint)
+		}
 
-	for index, svc := range i.VMSvc {
-		vmEndpoint := svc.GetVMEndpoint()
-
-		Log.Infof("Start vm tunneling with Ngrok, name=%v id=%v svc=%v", i.VMname, i.VMID, vmEndpoint)
-		ngrokRes, err := v.NgrokForwarder(vmEndpoint, nil)
+		Log.Infof("Start vm tunneling with Ngrok, name=%v id=%v svc=%v", InsTun.InstanceName, InsTun.InstanceID, InstanceEP.Endpoint)
+		ngrokRes, err := NGProvider.NgrokForwarder(InstanceEP.Endpoint, NGEndpointType)
 		if err != nil {
 			return err
 		}
 
-		res := ngrokRes.URL().Host
-		i.VMSvc[index].TunnelEndpoint = map[string]any{
-			"address": strings.Split(res, ":")[0],
-			"port": func() int {
-				num, err := strconv.Atoi(strings.Split(res, ":")[1])
-				if err != nil {
-					Log.Panic(err)
-				}
-				return num
-			}(),
+		InsTun.SVC[i].InstanceEndpoint.TunnelEndpoint = &Svc{
+			Port:     443,
+			PortName: InstanceEP.PortName,
+			Endpoint: ngrokRes.URL().Host,
 		}
 	}
 
 	return nil
 }
 
-// Stop the ngrok tunneling by Target vm endpoint or all tunneling if target vm endpoint is empty
-func (i *VmTunnel) StopNgrok(v provider.Ngrok, TvmEndpoint string) {
-	for _, svc := range i.VMSvc {
-		vmEndpoint := svc.GetVMEndpoint()
-		if vmEndpoint == TvmEndpoint || TvmEndpoint == "" {
-			v.NgrokStop(vmEndpoint)
-		}
+func (InsTun *InstanceTunnel) PurgeNGEndpoint(cmp *gophercloud.ServiceClient) {
+	for _, svc := range InsTun.SVC {
+		key := fmt.Sprintf(config.NgrokTunnelMetadata, svc.InstanceEndpoint.TunnelEndpoint.PortName)
+		Log.Infof("Delete ngrok tunnel from vm property, name=%v id=%v svc=%v", InsTun.InstanceName, InsTun.InstanceID, key)
+		pkg.RemoveCmpProperty(cmp, InsTun.InstanceName, key)
 	}
 }
 
-func (i *TunnelData) InitNGCtx() {
-	if i.TunProvider.NG.Active {
-		if !i.TunProvider.NG.StaticURLs {
-			Log.Infof("Ngrok static url is %v deleting all ngrok tunnels", i.TunProvider.NG.StaticURLs)
-
-			for index, tun := range i.Tunnels {
-				for _, svc := range tun.VMSvc {
-					ep := svc.GetTunnelEndpoint()
-					key := fmt.Sprintf(config.NgrokTunnelMetadata, svc.VMEndpoint["WellKnownPorts"].(string))
-					computeClient := pkg.InitComputeClient(context.Background())
-					Log.Infof("Delete ngrok tunnel from vm property, name=%v id=%v svc=%v property=%v", tun.VMname, tun.VMID, ep, key)
-					pkg.RemoveCmpProperty(computeClient, tun.VMID, key)
-				}
-
-				tun.StopNgrok(i.TunProvider.NG, "")
-				i.RemoveTunnelsByIndex(index)
-			}
-		} else {
-			Log.Infof("Ngrok static url is %v starting all ngrok tunnels", i.TunProvider.NG.StaticURLs)
-			for _, tun := range i.Tunnels {
-				for _, svc := range tun.VMSvc {
-					vmEndpoint := svc.GetVMEndpoint()
-					tunEndpoint := svc.GetTunnelEndpoint()
-					Log.Infof("Starting %v", tunEndpoint)
-
-					_, err := i.TunProvider.NG.NgrokForwarder(vmEndpoint, &tunEndpoint)
-					if err != nil {
-						Log.Fatal(err)
-					}
+func (tunData *TunnelData) InitNGCtx(cmp *gophercloud.ServiceClient) error {
+	if tunData.TunProvider.NG.Active {
+		if !tunData.TunProvider.NG.StaticURLs {
+			Log.Infof("Ngrok static url is %v deleting all ngrok tunnels", tunData.TunProvider.NG.StaticURLs)
+			for i := range tunData.Tunnels {
+				instanceTun := tunData.Tunnels[i]
+				instanceTun.PurgeNGEndpoint(cmp)
+				err := tunData.AddNGTunnel(&instanceTun)
+				if err != nil {
+					return err
 				}
 			}
 		}
+		return nil
+	}
+
+	return nil
+}
+
+// Stop the ngrok tunneling by Target vm endpoint or all tunneling if target vm endpoint is empty
+func (InsTun *InstanceTunnel) DeleteNGTunnel(Prov provider.Provider) {
+	for _, svc := range InsTun.SVC {
+		Prov.NG.NgrokStop(svc.InstanceEndpoint.TunnelEndpoint.Endpoint)
+		// TODO: Add func to delete the dns record
 	}
 }
