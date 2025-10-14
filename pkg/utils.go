@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/gophercloud/gophercloud/v2"
@@ -134,4 +135,11 @@ func GetInstanceDetails(computeClient *gophercloud.ServiceClient, InstanceID str
 	}
 
 	return vmServer, nil
+}
+
+func StripScheme(s string) string {
+	if i := strings.Index(s, "://"); i != -1 {
+		return s[i+3:]
+	}
+	return s
 }

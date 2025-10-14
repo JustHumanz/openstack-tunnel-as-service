@@ -20,7 +20,7 @@ func (sv *InstanceService) CreateCFSubDNS(instanceID string) string {
 }
 
 // Register new SVC into CloudFlare tunnel
-func (InsTun *InstanceTunnel) AddCFTunnel(Prov provider.Provider) error {
+func (InsTun *InstanceTunnel) AddCFTunnel(Prov *provider.Provider) error {
 	CFProvider := Prov.CF
 	domain := CFProvider.Domain
 	for i := range InsTun.SVC {
@@ -54,39 +54,25 @@ func (InsTun *InstanceTunnel) AddCFTunnel(Prov provider.Provider) error {
 	return nil
 }
 
-// Stop the cloudflare tunneling by Target vm endpoint or all tunneling if target targetSVC is nill
-func (InsTun *InstanceTunnel) DeleteCFTunnel(targetSVC InstanceService, Prov provider.Provider) error {
-	if (targetSVC == InstanceService{}) {
-		for index, svc := range InsTun.SVC {
-			InsTun.SVC = append(InsTun.SVC[:index], InsTun.SVC[index+1:]...)
-			err := Prov.CF.StopCFIngress(svc.CreateCFSVC())
-			if err != nil {
+// Stop the cloudflare tunneling by Target vm endpoint or all tunneling if targetSVC is nil
+func (InsTun *InstanceTunnel) DeleteCFTunnel(targetSVC *InstanceService, Prov *provider.Provider) error {
+	newSVC := InsTun.SVC[:0] // Reuse underlying array
+	for _, svc := range InsTun.SVC {
+		// If targetSVC is zero, remove all; else, remove only matching
+		toDelete := (targetSVC == nil) || (svc == *targetSVC)
+		if toDelete {
+			if err := Prov.CF.StopCFIngress(svc.CreateCFSVC()); err != nil {
 				return err
 			}
-
-			err = Prov.CF.DeleteTunnelDNS(svc.CreateCFSubDNS(InsTun.InstanceID))
-			if err != nil {
+			if err := Prov.CF.DeleteTunnelDNS(svc.InstanceEndpoint.TunnelEndpoint.Endpoint); err != nil {
 				return err
 			}
-		}
-	} else {
-		for index, svc := range InsTun.SVC {
-			if svc == targetSVC {
-				InsTun.SVC = append(InsTun.SVC[:index], InsTun.SVC[index+1:]...)
-				err := Prov.CF.StopCFIngress(svc.CreateCFSVC())
-				if err != nil {
-					return err
-				}
-
-				err = Prov.CF.DeleteTunnelDNS(svc.CreateCFSubDNS(InsTun.InstanceID))
-				if err != nil {
-					return err
-				}
-
-			}
+			// Don't add to newSVC (effectively removing it)
+		} else {
+			newSVC = append(newSVC, svc)
 		}
 	}
-
+	InsTun.SVC = newSVC
 	return nil
 }
 

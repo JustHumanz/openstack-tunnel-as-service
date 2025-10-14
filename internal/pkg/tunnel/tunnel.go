@@ -56,7 +56,7 @@ func (insTun *InstanceTunnel) GetInstanceMetadata() []string {
 	return metadata
 }
 
-func (insTun *InstanceTunnel) UpdateInstace(newMetadata []string, Prov provider.Provider) ([]string, []string, error) {
+func (insTun *InstanceTunnel) UpdateInstace(newMetadata []string, Prov *provider.Provider) ([]string, []string, error) {
 	var removedEP, newEP []string
 	oldMetadata := insTun.GetInstanceMetadata()
 	removedTmp := pkg.Difference(oldMetadata, newMetadata)
@@ -67,11 +67,22 @@ func (insTun *InstanceTunnel) UpdateInstace(newMetadata []string, Prov provider.
 		for _, v := range insTun.SVC {
 			for _, k := range removedTmp {
 				if strconv.Itoa(v.InstanceEndpoint.Port) == k {
-					err := insTun.DeleteCFTunnel(v, Prov)
-					if err != nil {
-						return nil, nil, err
+					removedEP = append(removedEP, v.InstanceEndpoint.PortName)
+
+					switch {
+					case Prov.CF.Active:
+						err := insTun.DeleteCFTunnel(&v, Prov)
+						if err != nil {
+							return nil, nil, err
+						}
+					case Prov.NG.Active:
+						err := insTun.DeleteNGTunnel(&v, Prov)
+						if err != nil {
+							return nil, nil, err
+						}
+					default:
+						Log.Error("Invalid Provider")
 					}
-					removedEP = append(removedEP, v.InstanceEndpoint.Endpoint)
 				}
 			}
 		}
@@ -83,12 +94,11 @@ func (insTun *InstanceTunnel) UpdateInstace(newMetadata []string, Prov provider.
 			return nil, nil, err
 		}
 
-		newEP = eps
-
 		err = insTun.AddSVC(eps)
 		if err != nil {
 			return nil, nil, err
 		}
+		newEP = eps
 
 		switch {
 		case Prov.CF.Active:
@@ -97,7 +107,10 @@ func (insTun *InstanceTunnel) UpdateInstace(newMetadata []string, Prov provider.
 				return nil, nil, err
 			}
 		case Prov.NG.Active:
-
+			err = insTun.AddNGTunnel(Prov)
+			if err != nil {
+				return nil, nil, err
+			}
 		default:
 			Log.Error("Invalid Provider")
 		}
@@ -163,12 +176,15 @@ func (tun *TunnelData) AddNewTun(newTun *InstanceTunnel, newTunMetaData []string
 
 	switch {
 	case tun.TunProvider.CF.Active:
-		err = newTun.AddCFTunnel(tun.TunProvider)
+		err = newTun.AddCFTunnel(&tun.TunProvider)
 		if err != nil {
 			return err
 		}
 	case tun.TunProvider.NG.Active:
-
+		err = newTun.AddNGTunnel(&tun.TunProvider)
+		if err != nil {
+			return err
+		}
 	default:
 		Log.Error("Invalid Provider")
 	}
@@ -179,17 +195,17 @@ func (tun *TunnelData) AddNewTun(newTun *InstanceTunnel, newTunMetaData []string
 func (tun *TunnelData) DeleteTun(deleteTun *InstanceTunnel) error {
 	if tun.TunProvider.CF.Active {
 		Log.Infof("Server not found, delete all cloudflare tunnel, name=%v id=%v", deleteTun.InstanceName, deleteTun.InstanceID)
-		return deleteTun.DeleteCFTunnel(InstanceService{}, tun.TunProvider)
+		return deleteTun.DeleteCFTunnel(nil, &tun.TunProvider)
 
 	} else if tun.TunProvider.NG.Active {
 		Log.Infof("Server not found, delete all ngrok tunnel, name=%v id=%v", deleteTun.InstanceName, deleteTun.InstanceID)
-		deleteTun.DeleteNGTunnel(tun.TunProvider)
+		deleteTun.DeleteNGTunnel(nil, &tun.TunProvider)
 	}
 
 	return nil
 }
 
-func (instance *InstanceTunnel) UpdateInstanceMetadata(computeClient *gophercloud.ServiceClient, Prov provider.Provider) error {
+func (instance *InstanceTunnel) UpdateAllInstanceMetadata(computeClient *gophercloud.ServiceClient, Prov provider.Provider) error {
 	for _, svc := range instance.SVC {
 		key := ""
 		switch {
@@ -207,7 +223,7 @@ func (instance *InstanceTunnel) UpdateInstanceMetadata(computeClient *gopherclou
 	return nil
 }
 
-func (instance *InstanceTunnel) AddOneInstanceMetadata(computeClient *gophercloud.ServiceClient, Prov provider.Provider, targetEP string) error {
+func (instance *InstanceTunnel) UpdateOneInstanceMetadata(computeClient *gophercloud.ServiceClient, Prov provider.Provider, targetEP string) error {
 	for _, svc := range instance.SVC {
 		if svc.InstanceEndpoint.Endpoint != targetEP {
 			continue
@@ -231,15 +247,7 @@ func (instance *InstanceTunnel) AddOneInstanceMetadata(computeClient *gopherclou
 
 func (instance *InstanceTunnel) DelAllInstanceMetadata(computeClient *gophercloud.ServiceClient, Prov provider.Provider) error {
 	for _, svc := range instance.SVC {
-		key := ""
-		switch {
-		case Prov.CF.Active:
-			key = fmt.Sprintf(config.CloudflareTunnelMetadata, svc.InstanceEndpoint.PortName)
-
-		case Prov.NG.Active:
-			key = fmt.Sprintf(config.NgrokTunnelMetadata, svc.InstanceEndpoint.PortName)
-		}
-		err := pkg.RemoveCmpProperty(computeClient, instance.InstanceID, key)
+		err := instance.DelOneInstanceMetadata(computeClient, Prov, svc.InstanceEndpoint.PortName)
 		if err != nil {
 			return err
 		}
@@ -248,23 +256,17 @@ func (instance *InstanceTunnel) DelAllInstanceMetadata(computeClient *gopherclou
 }
 
 func (instance *InstanceTunnel) DelOneInstanceMetadata(computeClient *gophercloud.ServiceClient, Prov provider.Provider, targetEP string) error {
-	for _, svc := range instance.SVC {
-		if svc.InstanceEndpoint.Endpoint != targetEP {
-			continue
-		}
+	key := ""
+	switch {
+	case Prov.CF.Active:
+		key = fmt.Sprintf(config.CloudflareTunnelMetadata, targetEP)
 
-		key := ""
-		switch {
-		case Prov.CF.Active:
-			key = fmt.Sprintf(config.CloudflareTunnelMetadata, svc.InstanceEndpoint.PortName)
-
-		case Prov.NG.Active:
-			key = fmt.Sprintf(config.NgrokTunnelMetadata, svc.InstanceEndpoint.PortName)
-		}
-		err := pkg.RemoveCmpProperty(computeClient, instance.InstanceID, key)
-		if err != nil {
-			return err
-		}
+	case Prov.NG.Active:
+		key = fmt.Sprintf(config.NgrokTunnelMetadata, targetEP)
+	}
+	err := pkg.RemoveCmpProperty(computeClient, instance.InstanceID, key)
+	if err != nil {
+		return err
 	}
 	return nil
 }

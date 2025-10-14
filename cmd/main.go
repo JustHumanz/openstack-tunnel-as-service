@@ -19,7 +19,6 @@ var (
 	cloudflaredBin    = flag.String("cf", "/usr/bin/cloudflared", "The binary of cloudflared")
 	cloudflaredDomain = flag.String("domain", "example.com", "The Domain of your cloudflare")
 	AmqpURL           = flag.String("amqpURL", "amqp://nova:rabbitmq@127.0.0.1:5672/nova", "nova amqp url transporter")
-	apiPort           = flag.Int("port", 8080, "The port for the API server")
 	Log               = pkg.Log // Use the log from pkg/log.go
 	cmp               *gophercloud.ServiceClient
 )
@@ -30,6 +29,7 @@ func init() {
 	})
 	Log.SetOutput(os.Stdout)
 	Log.SetLevel(logrus.InfoLevel)
+	flag.Parse()
 
 	cmp = pkg.InitComputeClient(context.Background())
 	// Load existing tunnels from the database
@@ -41,7 +41,6 @@ func init() {
 
 	switch {
 	case os.Getenv("CLOUDFLARE_API_KEY") != "":
-		flag.Parse()
 
 		tunnelVMs.TunProvider = provider.Provider{
 			CF: provider.CloudFlare{

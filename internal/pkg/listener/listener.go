@@ -121,7 +121,7 @@ func CreateTun(m Message, TunData *tunnel.TunnelData, computeClient *gophercloud
 			}
 
 			//Update the results of Tunnel Backend endpoint
-			err = NewTun.UpdateInstanceMetadata(computeClient, TunData.TunProvider)
+			err = NewTun.UpdateAllInstanceMetadata(computeClient, TunData.TunProvider)
 			if err != nil {
 				return err
 			}
@@ -179,7 +179,7 @@ func UpdateTunnel(m Message, TunData *tunnel.TunnelData, computeClient *gophercl
 	//Updating the existing service
 	if metadata != nil && ExistingVM != nil {
 		Log.Infof("Instance update existing tunnel, checking for tunnels, name=%v id=%v", instanceName, instanceID)
-		removedEP, newEP, err := ExistingVM.UpdateInstace(metadata, TunData.TunProvider)
+		removedEP, newEP, err := ExistingVM.UpdateInstace(metadata, &TunData.TunProvider)
 		if err != nil {
 			return err
 		}
@@ -193,8 +193,8 @@ func UpdateTunnel(m Message, TunData *tunnel.TunnelData, computeClient *gophercl
 		}
 
 		for _, v := range newEP {
-			Log.Infof("Add new tunnel endpoint metadata, name=%v id=%v key=%v", instanceName, instanceID, v)
-			err := ExistingVM.AddOneInstanceMetadata(computeClient, TunData.TunProvider, v)
+			Log.Infof("Add new tunnel endpoint metadata, name=%v id=%v value=%v", instanceName, instanceID, v)
+			err := ExistingVM.UpdateOneInstanceMetadata(computeClient, TunData.TunProvider, v)
 			if err != nil {
 				return err
 			}
