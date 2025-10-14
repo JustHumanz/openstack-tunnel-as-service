@@ -58,7 +58,7 @@ func (i *CloudFlare) AddTunnelDNS(dnsRec string) error {
 		Comment: cloudflare.String("Created by openstack tunnel"),
 	}
 
-	if !isNewDns {
+	if isNewDns {
 		_, err = client.DNS.Records.New(context.Background(), dns.RecordNewParams{
 			ZoneID: ZoneID,
 			Body:   dnsCnameparm,
@@ -73,6 +73,27 @@ func (i *CloudFlare) AddTunnelDNS(dnsRec string) error {
 	return err
 }
 
+func (i *CloudFlare) DeleteTunnelDNS(dnsRec string) error {
+	client := i.CFapi.Client
+	ZoneID := cloudflare.String(i.CFapi.ZoneID)
+	emptyDns, dnsResp, err := i.CheckDomainName(dnsRec)
+	if err != nil {
+		return err
+	}
+
+	if !emptyDns {
+		Log.Infof("Deleting Domain %v", dnsRec)
+		_, err := client.DNS.Records.Delete(context.Background(), dnsResp.ID, dns.RecordDeleteParams{
+			ZoneID: ZoneID,
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 // CheckDomainName checks if the given domain name exists in the Cloudflare zone
 func (i *CloudFlare) CheckDomainName(dnsRec string) (bool, *dns.RecordResponse, error) {
 	client := i.CFapi.Client
@@ -82,18 +103,18 @@ func (i *CloudFlare) CheckDomainName(dnsRec string) (bool, *dns.RecordResponse, 
 		ZoneID: cloudflare.String(i.CFapi.ZoneID),
 	})
 	if err != nil {
-		return false, nil, err
+		return true, nil, err
 	}
 
 	for _, v := range records.Result {
 		sub := strings.Split(v.Name, ".")
 		if strings.EqualFold(sub[0], dnsRec) {
 			Log.Infof("Domain %v already exists", dnsRec)
-			return true, &v, nil
+			return false, &v, nil
 		}
 	}
 
-	return false, nil, nil
+	return true, nil, nil
 }
 
 // TODO: Add deleting dns trough CF API

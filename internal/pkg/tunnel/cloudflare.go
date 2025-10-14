@@ -12,10 +12,16 @@ func (sv *InstanceService) CreateCFSVC() string {
 	return fmt.Sprintf("%s://%s", prefix, sv.InstanceEndpoint.Endpoint) //it's should become ssh://127.0.0.1:22
 }
 
+func (sv *InstanceService) CreateCFSubDNS(instanceID string) string {
+	id := strings.Split(instanceID, "-")[0]
+	prefix := sv.InstanceEndpoint.PortName
+	sub := strings.Join([]string{id, prefix}, "-")
+	return sub
+}
+
 // Register new SVC into CloudFlare tunnel
 func (InsTun *InstanceTunnel) AddCFTunnel(Prov provider.Provider) error {
 	CFProvider := Prov.CF
-	id := strings.Split(InsTun.InstanceID, "-")[0]
 	domain := CFProvider.Domain
 	for i := range InsTun.SVC {
 		newSVC := InsTun.SVC[i]
@@ -23,13 +29,11 @@ func (InsTun *InstanceTunnel) AddCFTunnel(Prov provider.Provider) error {
 			continue
 		}
 
-		InstanceEP := newSVC.InstanceEndpoint
-		prefix := InstanceEP.PortName
-		sub := strings.Join([]string{id, prefix}, "-")
+		sub := newSVC.CreateCFSubDNS(InsTun.InstanceID)
 		vmDns := fmt.Sprintf("%v.%v", sub, domain)
 		CFService := newSVC.CreateCFSVC()
 
-		Log.Infof("Start vm tunneling with CloudFlare, name=%v id=%v svc=%v hostname=%v", InsTun.InstanceName, InsTun.InstanceID, InstanceEP.Endpoint, vmDns)
+		Log.Infof("Start vm tunneling with CloudFlare, name=%v id=%v svc=%v hostname=%v", InsTun.InstanceName, InsTun.InstanceID, newSVC.InstanceEndpoint.Endpoint, vmDns)
 		err := CFProvider.AddCFIngress(vmDns, CFService)
 		if err != nil {
 			return err
@@ -42,7 +46,7 @@ func (InsTun *InstanceTunnel) AddCFTunnel(Prov provider.Provider) error {
 
 		InsTun.SVC[i].InstanceEndpoint.TunnelEndpoint = &Svc{
 			Port:     443,
-			PortName: prefix,
+			PortName: newSVC.InstanceEndpoint.PortName,
 			Endpoint: vmDns,
 		}
 	}
@@ -59,7 +63,11 @@ func (InsTun *InstanceTunnel) DeleteCFTunnel(targetSVC InstanceService, Prov pro
 			if err != nil {
 				return err
 			}
-			// TODO: Add func to delete the dns record
+
+			err = Prov.CF.DeleteTunnelDNS(svc.CreateCFSubDNS(InsTun.InstanceID))
+			if err != nil {
+				return err
+			}
 		}
 	} else {
 		for index, svc := range InsTun.SVC {
@@ -69,7 +77,11 @@ func (InsTun *InstanceTunnel) DeleteCFTunnel(targetSVC InstanceService, Prov pro
 				if err != nil {
 					return err
 				}
-				// TODO: Add func to delete the dns record
+
+				err = Prov.CF.DeleteTunnelDNS(svc.CreateCFSubDNS(InsTun.InstanceID))
+				if err != nil {
+					return err
+				}
 
 			}
 		}
