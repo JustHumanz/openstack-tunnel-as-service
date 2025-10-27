@@ -139,6 +139,14 @@ func (i *CloudFlare) StartCF() error {
 		return err
 	}
 
+	go func() {
+		err = cmd.Wait()
+		if err != nil {
+			Log.Error(err)
+		}
+		Log.Warn("Cloudflared Reloaded")
+	}()
+
 	i.CloudFlareCmd = cmd
 
 	return nil
