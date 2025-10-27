@@ -46,10 +46,7 @@ func init() {
 			CF: provider.CloudFlare{
 				CloudflaredPath: *cloudflaredBin,
 				Domain:          *cloudflaredDomain,
-				SubDomainPrefix: map[string]string{ //TODO
-					"ssh": "ssh",
-				},
-				Active: true,
+				Active:          true,
 			},
 		}
 		Log.Info("Check CF tunnel")
