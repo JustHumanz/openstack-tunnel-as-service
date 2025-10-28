@@ -7,7 +7,7 @@ var (
 		22:   "ssh",
 		80:   "http",
 		3306: "mysql",
-		8080: "tcp",
+		-1:   "tcp",
 	}
 	NgrokTunnelMetadata      = "ngrok_endpoint_%v"
 	CloudflareTunnelMetadata = "cloudflare_endpoint_%v"
@@ -29,7 +29,7 @@ var (
 
 func GetKnowPort(portNum int) string {
 	if KnowNumberPort[portNum] == "" {
-		return KnowNumberPort[8080]
+		return KnowNumberPort[-1]
 	}
 	return KnowNumberPort[portNum]
 }
