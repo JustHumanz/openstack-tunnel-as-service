@@ -21,8 +21,7 @@ func (sv *InstanceService) CreateCFSubDNS(instanceID string) string {
 
 // Register new SVC into CloudFlare tunnel
 func (InsTun *InstanceTunnel) AddCFTunnel(Prov *provider.Provider) error {
-	CFProvider := Prov.CF
-	domain := CFProvider.Domain
+	domain := Prov.CF.Domain
 	for i := range InsTun.SVC {
 		newSVC := InsTun.SVC[i]
 		if newSVC.InstanceEndpoint.TunnelEndpoint != nil {
@@ -34,12 +33,12 @@ func (InsTun *InstanceTunnel) AddCFTunnel(Prov *provider.Provider) error {
 		CFService := newSVC.CreateCFSVC()
 
 		Log.Infof("Start vm tunneling with CloudFlare, name=%v id=%v svc=%v hostname=%v", InsTun.InstanceName, InsTun.InstanceID, newSVC.InstanceEndpoint.Endpoint, vmDns)
-		err := CFProvider.AddCFIngress(vmDns, CFService)
+		err := Prov.CF.AddCFIngress(vmDns, CFService)
 		if err != nil {
 			return err
 		}
 		Log.Infof("Create DNS Records, name=%v id=%v subdomain=%v", InsTun.InstanceName, InsTun.InstanceID, sub)
-		err = CFProvider.AddTunnelDNS(sub)
+		err = Prov.CF.AddTunnelDNS(sub)
 		if err != nil {
 			return err
 		}

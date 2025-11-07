@@ -141,9 +141,8 @@ func (i *CloudFlare) StartCF() error {
 	go func() {
 		err = i.CloudFlareCmd.Wait()
 		if err != nil {
-			Log.Error(err)
+			Log.Warn("Cloudflared Reloaded", err)
 		}
-		Log.Warn("Cloudflared Reloaded")
 	}()
 
 	return nil
@@ -151,7 +150,7 @@ func (i *CloudFlare) StartCF() error {
 
 // Reload the cloudflared
 func (i *CloudFlare) ReloadCF() error {
-	Log.Infof("Reloading %v", i.CloudflaredPath)
+	Log.Infof("Reloading %v with pid %d", i.CloudflaredPath, i.CloudFlareCmd.Process.Pid)
 	err := i.CloudFlareCmd.Process.Kill()
 	if err != nil {
 		return err
