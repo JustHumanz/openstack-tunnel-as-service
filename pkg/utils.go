@@ -2,7 +2,6 @@ package pkg
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"regexp"
@@ -18,7 +17,6 @@ import (
 )
 
 const ipv4Regex = `\b(?:\d{1,3}\.){3}\d{1,3}\b`
-const tcpTimeout = 1 * time.Minute
 
 func ParseOpenStackIPs(fixed_ips any) []string {
 	result := regexp.MustCompile(ipv4Regex).FindAllString(fmt.Sprintf("%v", fixed_ips), -1)
@@ -44,30 +42,6 @@ func TestInstanceEP(ep string) bool {
 	}
 
 	return false
-}
-
-func FindVMactiveIP(vmIps string, vmSvc int) (string, error) {
-	ips := regexp.MustCompile(ipv4Regex).FindAllString(vmIps, -1)
-
-	for i := 0; i <= 5; i++ {
-		for _, ip := range ips {
-			Log.Infof("Connection checking. %d Attempting.", i)
-			vmIp := fmt.Sprintf("%v:%v", ip, vmSvc)
-
-			conn, err := net.DialTimeout("tcp", vmIp, tcpTimeout)
-			if err != nil {
-				Log.Error(err)
-				continue
-			}
-
-			defer conn.Close()
-			return ip, nil
-		}
-
-		time.Sleep(1 * time.Second)
-	}
-
-	return "", errors.New("VM service unreachable")
 }
 
 func Difference(a, b []string) []string {

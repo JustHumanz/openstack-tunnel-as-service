@@ -92,9 +92,3 @@ func TestTestInstanceEP_InvalidAddress(t *testing.T) {
 	result := TestInstanceEP("invalid:address")
 	assert.False(t, result)
 }
-
-func TestFindVMactiveIP_NoActive(t *testing.T) {
-	result, err := FindVMactiveIP("invalid", 9999)
-	assert.Error(t, err)
-	assert.Equal(t, "", result)
-}
