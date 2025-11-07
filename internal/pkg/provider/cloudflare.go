@@ -132,20 +132,25 @@ func (i *CloudFlare) ValidateCFcfg() error {
 
 // Start new cloudflared
 func (i *CloudFlare) StartCF() error {
-	cmd := exec.Command(i.CloudflaredPath, "tunnel", "--config", config.CFconfig, "run", config.TunnelName)
-	err := cmd.Start()
+	i.CloudFlareCmd = exec.Command(i.CloudflaredPath, "tunnel", "--config", config.CFconfig, "run", config.TunnelName)
+	err := i.CloudFlareCmd.Start()
 	if err != nil {
 		return err
 	}
 
-	i.CloudFlareCmd = cmd
+	go func() {
+		err = i.CloudFlareCmd.Wait()
+		if err != nil {
+			Log.Warn("Cloudflared Reloaded", err)
+		}
+	}()
 
 	return nil
 }
 
 // Reload the cloudflared
 func (i *CloudFlare) ReloadCF() error {
-	Log.Infof("Reloading %v", i.CloudflaredPath)
+	Log.Infof("Reloading %v with pid %d", i.CloudflaredPath, i.CloudFlareCmd.Process.Pid)
 	err := i.CloudFlareCmd.Process.Kill()
 	if err != nil {
 		return err

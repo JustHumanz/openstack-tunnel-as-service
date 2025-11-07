@@ -1,16 +1,14 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"os"
-	"time"
 
-	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/servers"
-	"github.com/justhumanz/openstack-tunnel-as-service/internal/config"
-	"github.com/justhumanz/openstack-tunnel-as-service/internal/pkg/api"
+	"github.com/gophercloud/gophercloud/v2"
 	"github.com/justhumanz/openstack-tunnel-as-service/internal/pkg/db"
+	"github.com/justhumanz/openstack-tunnel-as-service/internal/pkg/listener"
 	"github.com/justhumanz/openstack-tunnel-as-service/internal/pkg/provider"
-	"github.com/justhumanz/openstack-tunnel-as-service/internal/pkg/scheduler"
 	"github.com/justhumanz/openstack-tunnel-as-service/internal/pkg/tunnel"
 	"github.com/justhumanz/openstack-tunnel-as-service/pkg"
 	"github.com/sirupsen/logrus"
@@ -20,24 +18,20 @@ var (
 	tunnelVMs         = tunnel.TunnelData{}
 	cloudflaredBin    = flag.String("cf", "/usr/bin/cloudflared", "The binary of cloudflared")
 	cloudflaredDomain = flag.String("domain", "example.com", "The Domain of your cloudflare")
-	apiPort           = flag.Int("port", 8080, "The port for the API server")
+	AmqpURL           = flag.String("amqpURL", "amqp://nova:rabbitmq@127.0.0.1:5672/nova", "nova amqp url transporter")
 	Log               = pkg.Log // Use the log from pkg/log.go
+	cmp               *gophercloud.ServiceClient
 )
 
 func init() {
-	config.ServiceID = map[string]int{ // TODO
-		"ssh":   22,
-		"http":  80,
-		"https": 443,
-		"mysql": 3306,
-	}
-
 	Log.SetFormatter(&logrus.TextFormatter{
 		FullTimestamp: true,
 	})
 	Log.SetOutput(os.Stdout)
 	Log.SetLevel(logrus.InfoLevel)
+	flag.Parse()
 
+	cmp = pkg.InitComputeClient(context.Background())
 	// Load existing tunnels from the database
 	err := error(nil)
 	tunnelVMs.Tunnels, err = db.LoadTunnels()
@@ -47,16 +41,12 @@ func init() {
 
 	switch {
 	case os.Getenv("CLOUDFLARE_API_KEY") != "":
-		flag.Parse()
 
 		tunnelVMs.TunProvider = provider.Provider{
 			CF: provider.CloudFlare{
 				CloudflaredPath: *cloudflaredBin,
 				Domain:          *cloudflaredDomain,
-				SubDomainPrefix: map[string]string{ //TODO
-					"ssh": "ssh",
-				},
-				Active: true,
+				Active:          true,
 			},
 		}
 		Log.Info("Check CF tunnel")
@@ -80,33 +70,23 @@ func init() {
 			},
 		}
 		Log.Info("Tunnel as service has ben started, init ngrok tunnel")
-		tunnelVMs.InitNGCtx()
+		tunnelVMs.InitNGCtx(cmp)
 	default:
 		Log.Fatal("Provider not found")
 	}
 }
 
 func main() {
-	schedulerOps := scheduler.SchedulerOps{
-		CheckVMSInterval:    1 * time.Minute,
-		CheckTunnelInterval: 5 * time.Minute,
-		ServerListOps:       servers.ListOpts{},
-		TunnelVMs:           &tunnelVMs,
+	listenerOps := listener.ListenerOps{
+		InstancesTun: &tunnelVMs,
+		Cmp:          cmp,
+		AmqpURL:      *AmqpURL,
 	}
 
-	Log.Info("Starting scheduler")
-	err := schedulerOps.StartScheduler()
+	Log.Info("Starting amqp listener")
+	err := listenerOps.StartListener()
 	if err != nil {
-		Log.Fatal("Failed to start scheduler: ", err)
+		Log.Error(err)
 	}
-
-	apiOps := api.APIops{
-		TunnelVMs:  &tunnelVMs,
-		ListenPort: *apiPort,
-	}
-
-	Log.Info("Starting API server")
-	// Start the API server
-	apiOps.StartAPI()
 
 }

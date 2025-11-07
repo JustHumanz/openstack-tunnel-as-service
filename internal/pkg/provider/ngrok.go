@@ -4,25 +4,22 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/justhumanz/openstack-tunnel-as-service/pkg"
 	"golang.ngrok.com/ngrok/v2"
 )
 
-func (i *Ngrok) NgrokForwarder(vmEndpoint string, tunnelEndpoint *string) (ngrok.EndpointForwarder, error) {
+func (i *Ngrok) NgrokForwarder(InstanceEP string, EndpointType string) (ngrok.EndpointForwarder, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	i.NgrokCtx = append(i.NgrokCtx, NgCtx{
-		CtxCancel: cancel,
-		Ctx:       ctx,
+		VMendpoint: InstanceEP,
+		CtxCancel:  cancel,
+		Ctx:        ctx,
 	})
 
-	ngURL := "tcp://"
-	if tunnelEndpoint != nil {
-		ngURL += *tunnelEndpoint
-	}
-
-	vmEndpoint = fmt.Sprintf("tcp://%v", vmEndpoint)
-	a, err := ngrok.Forward(ctx, ngrok.WithUpstream(vmEndpoint), ngrok.WithURL(ngURL))
+	a, err := ngrok.Forward(ctx, ngrok.WithUpstream(InstanceEP), ngrok.WithURL(EndpointType))
 	if err != nil {
+		cancel() // cleanup
 		return nil, err
 	}
 
@@ -31,9 +28,11 @@ func (i *Ngrok) NgrokForwarder(vmEndpoint string, tunnelEndpoint *string) (ngrok
 
 // Stoping ngrok tunnel by CtxCancel()
 func (i *Ngrok) NgrokStop(vmEndpoint string) {
-	for _, v := range i.NgrokCtx {
-		if vmEndpoint == v.VMendpoint {
-			v.CtxCancel()
+	for index, v := range i.NgrokCtx {
+		if pkg.StripScheme(v.VMendpoint) == pkg.StripScheme(vmEndpoint) {
+			fmt.Println(v)
+			i.NgrokCtx[index].CtxCancel()
+			i.NgrokCtx = append(i.NgrokCtx[:index], i.NgrokCtx[index+1:]...)
 		}
 	}
 }

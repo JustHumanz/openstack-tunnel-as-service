@@ -2,33 +2,22 @@ package db
 
 import (
 	"encoding/json"
-	"log"
 	"os"
 
 	"github.com/justhumanz/openstack-tunnel-as-service/internal/config"
 	"github.com/justhumanz/openstack-tunnel-as-service/internal/pkg/tunnel"
+	"github.com/justhumanz/openstack-tunnel-as-service/pkg"
 )
 
-type VmTunnelJson struct {
-	VMname string         `json:"VMName"`
-	VMID   string         `json:"VMID"`
-	VMSvc  []tunnel.VmSvc `json:"VMSvc"`
-}
+var (
+	Log = pkg.Log // Use the log from pkg/log.go
+)
 
 // saveTunnels saves the current tunnelVMs to a JSON file.
 // It creates the file if it does not exist and overwrites it if it does.
-func SaveTunnels(Data []tunnel.VmTunnel) error {
-	log.Printf("Save tunnel data into %v", config.TunnelData)
-	tunnelVMsJson := []VmTunnelJson{}
-	for _, v := range Data {
-		tunnelVMsJson = append(tunnelVMsJson, VmTunnelJson{
-			VMname: v.VMname,
-			VMID:   v.VMID,
-			VMSvc:  v.VMSvc,
-		})
-	}
-
-	jsonData, err := json.MarshalIndent(tunnelVMsJson, "", "  ") // pretty-print
+func SaveTunnels(Data []tunnel.InstanceTunnel) error {
+	Log.Infof("Save tunnel data into %v", config.TunnelData)
+	jsonData, err := json.MarshalIndent(Data, "", "  ") // pretty-print
 	if err != nil {
 		return err
 	}
@@ -41,8 +30,8 @@ func SaveTunnels(Data []tunnel.VmTunnel) error {
 	return nil
 }
 
-func LoadTunnels() ([]tunnel.VmTunnel, error) {
-	var Data []tunnel.VmTunnel
+func LoadTunnels() ([]tunnel.InstanceTunnel, error) {
+	Data := []tunnel.InstanceTunnel{}
 	if _, err := os.Stat(config.TunnelData); err != nil {
 		err = SaveTunnels(Data) // Create file if it does not exist
 		if err != nil {
@@ -50,24 +39,15 @@ func LoadTunnels() ([]tunnel.VmTunnel, error) {
 		}
 	}
 
-	tunnelVMsJson := []VmTunnelJson{}
 	rawData, err := os.ReadFile(config.TunnelData)
 	if err != nil {
 		return nil, err
 	}
 
-	err = json.Unmarshal(rawData, &tunnelVMsJson)
+	err = json.Unmarshal(rawData, &Data)
 	if err != nil {
-		return nil, err
+		return []tunnel.InstanceTunnel{}, err
 	}
 
-	for index := range tunnelVMsJson {
-		Data = append(Data, tunnel.VmTunnel{
-			VMname: tunnelVMsJson[index].VMname,
-			VMID:   tunnelVMsJson[index].VMID,
-			VMSvc:  tunnelVMsJson[index].VMSvc,
-		})
-
-	}
 	return Data, nil
 }

@@ -1,13 +1,35 @@
 package config
 
+import "time"
+
 var (
-	ServiceID                map[string]int
+	KnowNumberPort = map[int]string{ // TODO
+		22:   "ssh",
+		80:   "http",
+		3306: "mysql",
+		-1:   "tcp",
+	}
 	NgrokTunnelMetadata      = "ngrok_endpoint_%v"
 	CloudflareTunnelMetadata = "cloudflare_endpoint_%v"
 )
 
 const (
-	CFconfig   = "config.yaml"
-	TunnelName = "OpenStack_vm"
+	TunnelName     = "OpenStack_vm"
+	TCPTimeout     = 1 * time.Minute
+	ConnectionWait = 10 * time.Second
+)
+
+var (
+	CFconfig = "config.yaml"
+)
+
+var (
 	TunnelData = "TunnelsData.json"
 )
+
+func GetKnowPort(portNum int) string {
+	if KnowNumberPort[portNum] == "" {
+		return KnowNumberPort[-1]
+	}
+	return KnowNumberPort[portNum]
+}

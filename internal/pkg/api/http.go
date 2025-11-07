@@ -1,5 +1,7 @@
 package api
 
+/// TODO: Rewrite using gorilla/mux or similar for better path param handling
+
 import (
 	"encoding/json"
 	"fmt"
@@ -39,17 +41,9 @@ func (i *APIops) ListVmTunnelsHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to load tunnels", http.StatusInternalServerError)
 		return
 	}
-	// Convert []tunnel.VmTunnel to []db.VmTunnelJson for consistent JSON output
-	var tunnelsJson []db.VmTunnelJson
-	for _, t := range tunnels {
-		tunnelsJson = append(tunnelsJson, db.VmTunnelJson{
-			VMname: t.VMname,
-			VMID:   t.VMID,
-			VMSvc:  t.VMSvc,
-		})
-	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(tunnelsJson)
+	json.NewEncoder(w).Encode(tunnels)
 }
 
 func (i *APIops) DeleteVmTunnelsHandler(w http.ResponseWriter, r *http.Request) {
@@ -62,40 +56,43 @@ func (i *APIops) DeleteVmTunnelsHandler(w http.ResponseWriter, r *http.Request) 
 	tunnels, err := db.LoadTunnels()
 	if err != nil {
 		Log.Error(err)
+		http.Error(w, "Failed to load tunnels", http.StatusInternalServerError)
 		return
 	}
-	// Convert []tunnel.VmTunnel to []db.VmTunnelJson for consistent JSON output
-	for index, t := range tunnels {
-		if t.VMID == vmID {
-			TunnelVMs := i.TunnelVMs
+
+	tmpTunnel := []tunnel.InstanceTunnel{}
+	for _, t := range tunnels {
+		if t.InstanceID == vmID {
 			Prov := i.TunnelVMs.TunProvider
-			NG := Prov.NG
-			CF := Prov.CF
 
 			switch {
-			case NG.Active:
-				t.StopNgrok(NG, "")
-				return
-
-			case CF.Active:
-				err := t.StopCloudFlare(CF, "")
+			case Prov.CF.Active:
+				err := t.DeleteCFTunnel(nil, &Prov)
 				if err != nil {
 					Log.Error(err)
-					http.Error(w, "Failed to stop Cloudflare tunnel", http.StatusInternalServerError)
-					return
 				}
-
+			case Prov.NG.Active:
+				err := t.DeleteNGTunnel(nil, &Prov)
+				if err != nil {
+					Log.Error(err)
+				}
 			default:
-				http.Error(w, "No active tunnel provider found", http.StatusInternalServerError)
-				return
+				Log.Error("Invalid Provider")
 			}
-
-			TunnelVMs.RemoveTunnelsByIndex(index)
+		} else {
+			tmpTunnel = append(tmpTunnel, t)
 		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{
-			"message": fmt.Sprintf("Tunnel for VM %s deleted successfully", vmID),
-		})
 	}
+
+	err = db.SaveTunnels(tmpTunnel)
+	if err != nil {
+		Log.Error(err)
+		http.Error(w, "Failed to save tunnels", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"message": fmt.Sprintf("Tunnel for VM %s deleted successfully", vmID),
+	})
 }
