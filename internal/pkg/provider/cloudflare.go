@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"syscall"
 	"time"
 
 	"github.com/justhumanz/openstack-tunnel-as-service/internal/config"
@@ -133,21 +132,19 @@ func (i *CloudFlare) ValidateCFcfg() error {
 
 // Start new cloudflared
 func (i *CloudFlare) StartCF() error {
-	cmd := exec.Command(i.CloudflaredPath, "tunnel", "--config", config.CFconfig, "run", config.TunnelName)
-	err := cmd.Start()
+	i.CloudFlareCmd = exec.Command(i.CloudflaredPath, "tunnel", "--config", config.CFconfig, "run", config.TunnelName)
+	err := i.CloudFlareCmd.Start()
 	if err != nil {
 		return err
 	}
 
 	go func() {
-		err = cmd.Wait()
+		err = i.CloudFlareCmd.Wait()
 		if err != nil {
 			Log.Error(err)
 		}
 		Log.Warn("Cloudflared Reloaded")
 	}()
-
-	i.CloudFlareCmd = cmd
 
 	return nil
 }
@@ -155,7 +152,7 @@ func (i *CloudFlare) StartCF() error {
 // Reload the cloudflared
 func (i *CloudFlare) ReloadCF() error {
 	Log.Infof("Reloading %v", i.CloudflaredPath)
-	err := syscall.Kill(i.CloudFlareCmd.Process.Pid, syscall.SIGINT)
+	err := i.CloudFlareCmd.Process.Kill()
 	if err != nil {
 		return err
 	}
